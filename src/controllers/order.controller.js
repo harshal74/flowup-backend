@@ -11,6 +11,7 @@ const createOrder = async (req, res) => {
       customer,
       items,
       note,
+      address,
     } = req.body;
 
     // Single Restaurant Setup
@@ -56,7 +57,8 @@ const createOrder = async (req, res) => {
     // Delivery Validation
     if (
       orderType === "DELIVERY" &&
-      !customer.address
+      !customer.address &&
+      !address
     ) {
       return res.status(400).json({
         success: false,
@@ -164,6 +166,11 @@ const createOrder = async (req, res) => {
       totalAmount,
 
       note: note || "",
+
+      address:
+        orderType === "DELIVERY"
+          ? address || customer.address || ""
+          : "",
     });
 
     // Update Customer Stats

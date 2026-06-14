@@ -136,6 +136,13 @@ const orderSchema = new mongoose.Schema(
       maxlength: 500,
     },
 
+    address: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 500,
+    },
+
     status: {
       type: String,
       enum: [

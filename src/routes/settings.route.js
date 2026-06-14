@@ -13,7 +13,7 @@ const protect = require("../middleware/auth.middleware");
 
 const router = express.Router();
 
-router.get("/", protect, getSettings);
+router.get("/", getSettings);
 
 router.put("/", protect, updateSettings);
 

@@ -1,18 +1,26 @@
 const Setting = require("../models/Setting");
 
 // Get Settings
-const getSettings = async (req, res) => {
+const getSettings = async (
+  req,
+  res
+) => {
   try {
-    const restaurantId = req.user.restaurantId;
+    const restaurantId =
+  req.user?.restaurantId ||
+  "FLOWUP001";
 
-    const settings = await Setting.findOne({
-      restaurantId,
-    });
+    const settings =
+      await Setting.findOne({
+        restaurantId,
+      });
+
 
     if (!settings) {
       return res.status(404).json({
         success: false,
-        message: "Settings not found",
+        message:
+          "Settings not found",
       });
     }
 
@@ -21,11 +29,15 @@ const getSettings = async (req, res) => {
       data: settings,
     });
   } catch (error) {
-    console.error("Get Settings Error:", error);
+    console.error(
+      "Get Settings Error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Internal server error",
+      message:
+        "Internal server error",
     });
   }
 };
@@ -71,7 +83,7 @@ const openShop = async (req, res) => {
     const settings = await Setting.findOneAndUpdate(
       { restaurantId },
       { shopOpen: true },
-      { new: true }
+      { returnDocument: "after" }
     );
 
     return res.status(200).json({
@@ -97,7 +109,7 @@ const closeShop = async (req, res) => {
     const settings = await Setting.findOneAndUpdate(
       { restaurantId },
       { shopOpen: false },
-      { new: true }
+      { returnDocument: "after" }
     );
 
     return res.status(200).json({
