@@ -2,10 +2,44 @@ const Customer = require("../models/Customer");
 const Order = require("../models/Order");
 
 // Get All Customers
+// Uses aggregation to join Order collection and attach
+// each customer's distinct orderTypes in a single DB query.
 const getCustomers = async (req, res) => {
   try {
-    const customers = await Customer.find()
-      .sort({ createdAt: -1 });
+    const restaurantId = req.user.restaurantId;
+
+    const customers = await Customer.aggregate([
+      // 1. Only this restaurant's customers
+      { $match: { restaurantId } },
+
+      // 2. Join orders for each customer
+      {
+        $lookup: {
+          from: "orders",
+          localField: "_id",
+          foreignField: "customerId",
+          as: "orders",
+          pipeline: [
+            { $project: { orderType: 1, _id: 0 } },
+          ],
+        },
+      },
+
+      // 3. Derive distinct orderTypes array from joined orders
+      {
+        $addFields: {
+          orderTypes: {
+            $setUnion: ["$orders.orderType", []],
+          },
+        },
+      },
+
+      // 4. Drop the full orders array — we only needed it for the types
+      { $project: { orders: 0 } },
+
+      // 5. Latest first
+      { $sort: { createdAt: -1 } },
+    ]);
 
     return res.status(200).json({
       success: true,
