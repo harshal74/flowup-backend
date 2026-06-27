@@ -19,7 +19,8 @@ const createOrder = async (req, res) => {
       address,
     } = req.body;
 
-    const restaurantId = "FLOWUP001";
+    // Single Restaurant Setup — reads from env so it never needs a code change
+    const restaurantId = process.env.RESTAURANT_ID || "FLOWUP001";
 
     if (!customer) {
       return res.status(400).json({ success: false, message: "Customer details are required" });

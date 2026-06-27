@@ -55,7 +55,6 @@ const orderSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-      default: "FLOWUP001",
     },
 
     orderNumber: {

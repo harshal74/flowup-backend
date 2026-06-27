@@ -5,7 +5,7 @@ const { emitToRestaurant } = require("../socket");
 const createWaiterRequest = async (req, res) => {
   try {
     const { tableNumber, customerName, orderId } = req.body;
-    const restaurantId = "FLOWUP001";
+    const restaurantId = process.env.RESTAURANT_ID || "FLOWUP001";
 
     if (!tableNumber || tableNumber < 1) {
       return res.status(400).json({ success: false, message: "Table number is required" });

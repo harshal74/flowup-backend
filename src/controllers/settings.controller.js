@@ -7,8 +7,9 @@ const getSettings = async (
 ) => {
   try {
     const restaurantId =
-  req.user?.restaurantId ||
-  "FLOWUP001";
+      req.user?.restaurantId ||
+      process.env.RESTAURANT_ID ||
+      "FLOWUP001";
 
     const settings =
       await Setting.findOne({
