@@ -122,7 +122,7 @@ const createOrder = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Order placed successfully",
-      data: order,
+      data: populatedOrder,
     });
   } catch (error) {
     console.error("Create Order Error:", error);

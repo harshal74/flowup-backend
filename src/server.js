@@ -13,7 +13,7 @@ const httpServer = http.createServer(app);
 // Attach Socket.IO — pass the same allowed origins so CORS is consistent
 initSocket(httpServer, ALLOWED_ORIGINS);
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);

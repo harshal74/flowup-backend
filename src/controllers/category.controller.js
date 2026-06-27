@@ -1,15 +1,9 @@
 const Category = require("../models/Category");
 
-// Create Category
+// Create Category — displayOrder is auto-assigned as max+1
 const createCategory = async (req, res) => {
   try {
-    const {
-      restaurantId,
-      name,
-      description,
-      image,
-      displayOrder,
-    } = req.body;
+    const { restaurantId, name, description, image } = req.body;
 
     if (!restaurantId || !name) {
       return res.status(400).json({
@@ -30,12 +24,18 @@ const createCategory = async (req, res) => {
       });
     }
 
+    // Auto-assign displayOrder = current max + 1
+    const last = await Category.findOne({ restaurantId })
+      .sort({ displayOrder: -1 })
+      .select("displayOrder");
+    const nextOrder = last ? last.displayOrder + 1 : 1;
+
     const category = await Category.create({
       restaurantId,
       name: name.trim(),
-      description,
-      image,
-      displayOrder,
+      description: description || "",
+      image: image || "",
+      displayOrder: nextOrder,
     });
 
     return res.status(201).json({
@@ -45,11 +45,7 @@ const createCategory = async (req, res) => {
     });
   } catch (error) {
     console.error("Create Category Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
@@ -216,6 +212,35 @@ const toggleCategoryStatus = async (req, res) => {
   }
 };
 
+// Bulk reorder — accepts [{ id, displayOrder }, ...] and updates all in one call
+const reorderCategories = async (req, res) => {
+  try {
+    const { orders } = req.body; // Array<{ id: string; displayOrder: number }>
+
+    if (!Array.isArray(orders) || orders.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "orders must be a non-empty array of { id, displayOrder }",
+      });
+    }
+
+    // Run all updates in parallel
+    await Promise.all(
+      orders.map(({ id, displayOrder }) =>
+        Category.findByIdAndUpdate(id, { displayOrder })
+      )
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Category order updated",
+    });
+  } catch (error) {
+    console.error("Reorder Categories Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 module.exports = {
   createCategory,
   getCategories,
@@ -223,4 +248,5 @@ module.exports = {
   updateCategory,
   deleteCategory,
   toggleCategoryStatus,
-};  
+  reorderCategories,
+};

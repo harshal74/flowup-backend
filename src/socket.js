@@ -4,25 +4,33 @@ let io = null;
 
 /**
  * Initialise Socket.IO on the given HTTP server.
- * @param {import('http').Server} httpServer
- * @param {string[]} allowedOrigins  — same list used by Express CORS
+ * Uses the same origin-matching logic as Express CORS so both
+ * REST requests and WebSocket connections are treated identically.
  */
 function initSocket(httpServer, allowedOrigins) {
-  const origins = allowedOrigins || [
-    process.env.ADMIN_ORIGIN    || "http://localhost:5173",
-    process.env.CUSTOMER_ORIGIN || "http://localhost:5174",
-  ];
+  const staticOrigins = [
+    ...(allowedOrigins || []),
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://localhost:3000",
+  ].filter(Boolean);
 
   io = new Server(httpServer, {
     cors: {
-      origin: origins,
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (staticOrigins.includes(origin)) return callback(null, true);
+        if (/\.netlify\.app$/.test(origin)) return callback(null, true);
+        if (/\.up\.railway\.app$/.test(origin)) return callback(null, true);
+        callback(new Error(`Socket CORS: origin '${origin}' not allowed`));
+      },
       methods: ["GET", "POST"],
       credentials: true,
     },
   });
 
   io.on("connection", (socket) => {
-    // Every client must supply restaurantId in handshake query
     const restaurantId = socket.handshake.query.restaurantId;
 
     if (!restaurantId) {
@@ -31,17 +39,11 @@ function initSocket(httpServer, allowedOrigins) {
       return;
     }
 
-    // Join the room for this restaurant — ensures tenant isolation
     socket.join(restaurantId);
-
-    console.log(
-      `[Socket] Connected: ${socket.id}  restaurant: ${restaurantId}`
-    );
+    console.log(`[Socket] Connected: ${socket.id}  restaurant: ${restaurantId}`);
 
     socket.on("disconnect", () => {
-      console.log(
-        `[Socket] Disconnected: ${socket.id}  restaurant: ${restaurantId}`
-      );
+      console.log(`[Socket] Disconnected: ${socket.id}  restaurant: ${restaurantId}`);
     });
   });
 
@@ -51,14 +53,10 @@ function initSocket(httpServer, allowedOrigins) {
 
 /**
  * Broadcast an event to every socket in a restaurant's room.
- * Safe to call before initSocket — logs a warning and returns
- * gracefully if the server hasn't been initialised yet.
  */
 function emitToRestaurant(restaurantId, eventName, payload) {
   if (!io) {
-    console.warn(
-      `[Socket] emitToRestaurant called before init — event '${eventName}' dropped`
-    );
+    console.warn(`[Socket] emitToRestaurant called before init — '${eventName}' dropped`);
     return;
   }
   io.to(restaurantId).emit(eventName, payload);
