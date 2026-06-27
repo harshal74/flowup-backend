@@ -1,26 +1,26 @@
 const Order = require("../models/Order");
 const Menu = require("../models/Menu");
 const Customer = require("../models/Customer");
+const Setting = require("../models/Setting");
 const { emitToRestaurant } = require("../socket");
 
 // ─────────────────────────────────────────────────────────────────
 // Create Order  (public — no auth required)
-// After saving, emits  "new_order"  to the restaurant room so the
-// admin dashboard receives it instantly without polling.
 // ─────────────────────────────────────────────────────────────────
 const createOrder = async (req, res) => {
   try {
-    const {
-      orderType,
-      tableNumber,
-      customer,
-      items,
-      note,
-      address,
-    } = req.body;
+    const { orderType, tableNumber, customer, items, note, address } = req.body;
 
-    // Single Restaurant Setup — reads from env so it never needs a code change
     const restaurantId = process.env.RESTAURANT_ID || "FLOWUP001";
+
+    // ── Shop open/closed check ─────────────────────────────────
+    const settings = await Setting.findOne({ restaurantId });
+    if (settings && settings.shopOpen === false) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant is currently closed. Orders are not being accepted.",
+      });
+    }
 
     if (!customer) {
       return res.status(400).json({ success: false, message: "Customer details are required" });
