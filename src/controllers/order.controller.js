@@ -92,7 +92,7 @@ const createOrder = async (req, res) => {
 
     const order = await Order.create({
       restaurantId,
-      orderNumber: `ORD-${Date.now()}`,
+      orderNumber: `ORD-${Date.now()}-${Math.floor(Math.random() * 9000) + 1000}`,
       customerId: existingCustomer._id,
       orderType,
       tableNumber: orderType === "DINE_IN" ? tableNumber : null,

@@ -18,9 +18,9 @@ const router = express.Router();
 
 router.post("/", protect, createMenu);
 
-router.get("/", getPublicMenus);
+router.get("/admin", protect, getAdminMenus);   // MUST be before /:id
 
-router.get("/admin", protect, getAdminMenus);
+router.get("/", getPublicMenus);
 
 router.get("/:id", getMenuById);
 

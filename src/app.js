@@ -9,6 +9,7 @@ const customerRoutes = require("./routes/customer.route");
 const dashboardRoutes = require("./routes/dashboard.route");
 const settingsRoutes = require("./routes/settings.route");
 const waiterRequestRoutes = require("./routes/waiterRequest.route");
+const billingRoutes = require("./routes/billing.route");
 
 const app = express();
 
@@ -35,6 +36,8 @@ app.use(cors({
     if (/\.netlify\.app$/.test(origin)) return callback(null, true);
     // Allow any *.up.railway.app subdomain
     if (/\.up\.railway\.app$/.test(origin)) return callback(null, true);
+    // Allow any *.onrender.com subdomain
+    if (/\.onrender\.com$/.test(origin)) return callback(null, true);
     callback(new Error(`CORS: origin '${origin}' not allowed`));
   },
   credentials: true,
@@ -58,5 +61,6 @@ app.use("/api/customers", customerRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/waiter-requests", waiterRequestRoutes);
+app.use("/api/billing", billingRoutes);
 
 module.exports = { app, ALLOWED_ORIGINS };

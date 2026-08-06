@@ -46,7 +46,7 @@ const orderItemSchema = new mongoose.Schema(
   },
   {
     _id: false,
-  }
+  },
 );
 
 const orderSchema = new mongoose.Schema(
@@ -87,8 +87,7 @@ const orderSchema = new mongoose.Schema(
       required: true,
       validate: {
         validator: (items) => items.length > 0,
-        message:
-          "Order must contain at least one item",
+        message: "Order must contain at least one item",
       },
     },
 
@@ -142,6 +141,12 @@ const orderSchema = new mongoose.Schema(
       maxlength: 500,
     },
 
+    billId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Bill",
+      default: null,
+    },
+
     status: {
       type: String,
       enum: [
@@ -159,12 +164,7 @@ const orderSchema = new mongoose.Schema(
 
     paymentStatus: {
       type: String,
-      enum: [
-        "PENDING",
-        "PAID",
-        "FAILED",
-        "REFUNDED",
-      ],
+      enum: ["PENDING", "PAID", "FAILED", "REFUNDED"],
       default: "PENDING",
     },
 
@@ -207,7 +207,7 @@ const orderSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Indexes
@@ -225,6 +225,4 @@ orderSchema.index({
   customerId: 1,
 });
 
-module.exports =
-  mongoose.models.Order ||
-  mongoose.model("Order", orderSchema);
+module.exports = mongoose.models.Order || mongoose.model("Order", orderSchema);

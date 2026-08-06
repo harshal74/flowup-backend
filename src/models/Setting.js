@@ -100,6 +100,12 @@ const settingSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    upiId: {
+      type: String,
+      default: "",
+      trim: true,
+    },
   },
   {
     timestamps: true,

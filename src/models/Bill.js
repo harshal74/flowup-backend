@@ -1,0 +1,94 @@
+const mongoose = require("mongoose");
+
+const billSchema = new mongoose.Schema(
+  {
+    restaurantId: {
+      type: String,
+      required: [true, "Restaurant ID is required"],
+      trim: true,
+      index: true,
+    },
+
+    tableNumber: {
+      type: Number,
+      default: null,
+    },
+
+    orderIds: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Order",
+        required: true,
+      },
+    ],
+
+    items: [
+        {
+            menuItemId: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "Menu",
+            },
+
+            name: String,
+
+            quantity: Number,
+
+            price: Number,
+
+            total: Number,
+        }
+    ],
+
+    subtotal: {
+      type: Number,
+      required: true,
+      default: 0,
+    },
+
+    gst: {
+      type: Number,
+      default: 0,
+    },
+
+    discount: {
+      type: Number,
+      default: 0,
+    },
+
+    grandTotal: {
+      type: Number,
+      required: true,
+    },
+
+    paymentStatus: {
+      type: String,
+      enum: ["Pending", "Paid", "Failed", "Refunded"],
+      default: "Pending",
+    },
+
+    paymentMethod: {
+      type: String,
+      enum: ["Cash", "UPI", "Card"],
+      default: "UPI",
+    },
+
+    invoiceNumber: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+
+    paidAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+
+module.exports =
+  mongoose.models.Bill ||
+  mongoose.model("Bill", billSchema);
