@@ -4,15 +4,18 @@
  * Every query is scoped to req.user.restaurantId (restaurant isolation).
  */
 
-const bcrypt       = require("bcryptjs");
-const mongoose     = require("mongoose");
-const Staff        = require("../models/Staff");
+const bcrypt        = require("bcryptjs");
+const mongoose      = require("mongoose");
+const Staff         = require("../models/Staff");
 const StaffActivity = require("../models/StaffActivity");
-const { logActivity } = require("../services/staffActivityService");
+const { logActivity }  = require("../services/staffActivityService");
+const { generateOtp, sendOtpEmail } = require("../services/emailService");
 
 const EMAIL_RE  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^\+?\d{7,15}$/;
-const MANAGEABLE_ROLES = ["CHEF", "WAITER", "ASSISTANT"];  // Admin cannot manage other ADMINs via this UI
+const MANAGEABLE_ROLES = ["CHEF", "WAITER", "ASSISTANT"];
+const OTP_EXPIRY_MS    = (Number(process.env.OTP_EXPIRY_MINUTES) || 10) * 60 * 1000;
+const MAX_OTP_ATTEMPTS = 5;
 
 // ── Helper ────────────────────────────────────────────────────────
 function isValidId(id) {
@@ -99,19 +102,18 @@ exports.getStaffById = async (req, res) => {
 };
 
 // ── POST /api/admin/staff ─────────────────────────────────────────
-// Admin creates a staff account directly — pre-verified, no OTP needed.
+// Admin creates a staff account → sends OTP email for verification.
+// The account is unverified/inactive until OTP is confirmed.
 exports.createStaff = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
     const { name, email, mobile, role, password } = req.body;
 
-    // Validate required fields
     const missing = ["name", "email", "mobile", "role", "password"]
       .filter(f => !req.body[f] || !String(req.body[f]).trim());
     if (missing.length) {
       return res.status(400).json({ success: false, message: `Missing: ${missing.join(", ")}` });
     }
-
     if (!EMAIL_RE.test(email.trim())) {
       return res.status(400).json({ success: false, message: "Invalid email format" });
     }
@@ -126,41 +128,182 @@ exports.createStaff = async (req, res) => {
     }
 
     const normEmail = email.toLowerCase().trim();
-    const existing  = await Staff.findOne({ email: normEmail });
+    const existing  = await Staff.findOne({ email: normEmail })
+      .select("+emailOtp +emailOtpExpiry +isEmailVerified");
+
+    // If an unverified account already exists (e.g., re-adding), resend OTP
     if (existing) {
+      if (!existing.isEmailVerified) {
+        const otp    = generateOtp();
+        const expiry = new Date(Date.now() + OTP_EXPIRY_MS);
+        existing.emailOtp         = otp;
+        existing.emailOtpExpiry   = expiry;
+        existing.emailOtpAttempts = 0;
+        await existing.save();
+        await sendOtpEmail({ to: normEmail, name: existing.name, otp });
+        return res.status(200).json({
+          success:    true,
+          message:    "An unverified account already exists. A new OTP has been sent.",
+          requiresOtp: true,
+          email:      normEmail,
+          staffId:    existing._id,
+        });
+      }
       return res.status(409).json({ success: false, message: "Email already registered" });
     }
 
+    // Create unverified account
     const hashed = await bcrypt.hash(password, 10);
-    const staff  = await Staff.create({
+    const otp    = generateOtp();
+    const expiry = new Date(Date.now() + OTP_EXPIRY_MS);
+
+    const staff = await Staff.create({
       restaurantId,
-      name:            name.trim(),
-      email:           normEmail,
-      mobile:          mobile.trim().replace(/\s/g, ""),
-      password:        hashed,
+      name:             name.trim(),
+      email:            normEmail,
+      mobile:           mobile.trim().replace(/\s/g, ""),
+      password:         hashed,
       role,
-      isEmailVerified: true,   // Admin-created accounts are pre-verified
-      isActive:        true,
-      createdBy:       null,   // created by Admin (different model)
+      isEmailVerified:  false,
+      isActive:         false,   // activated after OTP verification
+      emailOtp:         otp,
+      emailOtpExpiry:   expiry,
+      emailOtpAttempts: 0,
     });
 
-    // Log admin action (using a synthetic staff-like object for the logger)
+    // Send OTP — surface failures without blocking creation
+    const emailResult = await sendOtpEmail({ to: normEmail, name: name.trim(), otp });
+
     logActivity({
       staff: { _id: req.user._id, restaurantId, name: req.user.name, role: "ADMIN" },
-      action: "STAFF_CREATED",
+      action:     "STAFF_CREATED",
       entityType: "Staff",
-      entityId: staff._id,
-      newValue: `${staff.name} (${staff.role})`,
+      entityId:   staff._id,
+      newValue:   `${staff.name} (${staff.role}) — pending OTP verification`,
       req,
     });
 
-    const safe = await Staff
-      .findById(staff._id)
-      .select("-emailOtp -emailOtpExpiry -emailOtpAttempts -password");
+    const response = {
+      success:     true,
+      message:     "Staff account created. An OTP has been sent to their email for verification.",
+      requiresOtp: true,
+      email:       normEmail,
+      staffId:     staff._id,
+    };
 
-    return res.status(201).json({ success: true, message: "Staff created successfully", data: safe });
+    if (emailResult.dev) {
+      response.message = "Staff account created. SMTP not configured — check backend terminal for the OTP.";
+      response.devNote  = "OTP printed to backend console";
+    } else if (!emailResult.success) {
+      response.message    = `Staff account created but OTP email failed: ${emailResult.error}. Check backend terminal.`;
+      response.emailError = emailResult.error;
+    }
+
+    return res.status(201).json(response);
   } catch (err) {
     console.error("AdminStaff createStaff:", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// ── POST /api/admin/staff/:id/verify-otp ─────────────────────────
+// Admin verifies the OTP for a newly created staff account.
+exports.verifyStaffOtp = async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid staff ID" });
+    }
+    const restaurantId = req.user.restaurantId;
+    const { otp }      = req.body;
+
+    if (!otp) {
+      return res.status(400).json({ success: false, message: "OTP is required" });
+    }
+
+    const staff = await Staff.findOne({ _id: req.params.id, restaurantId })
+      .select("+emailOtp +emailOtpExpiry +emailOtpAttempts +isEmailVerified");
+
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Staff not found" });
+    }
+    if (staff.isEmailVerified) {
+      return res.status(400).json({ success: false, message: "Email already verified" });
+    }
+    if (staff.emailOtpAttempts >= MAX_OTP_ATTEMPTS) {
+      return res.status(429).json({ success: false, message: "Too many incorrect attempts. Resend OTP." });
+    }
+    if (!staff.emailOtpExpiry || new Date() > staff.emailOtpExpiry) {
+      return res.status(400).json({ success: false, message: "OTP has expired. Please resend." });
+    }
+    if (staff.emailOtp !== String(otp).trim()) {
+      staff.emailOtpAttempts += 1;
+      await staff.save();
+      const remaining = MAX_OTP_ATTEMPTS - staff.emailOtpAttempts;
+      return res.status(400).json({
+        success: false,
+        message: `Invalid OTP. ${remaining > 0 ? `${remaining} attempt(s) remaining.` : "No attempts left — resend OTP."}`,
+      });
+    }
+
+    // Verify + activate
+    staff.isEmailVerified  = true;
+    staff.isActive         = true;
+    staff.emailOtp         = null;
+    staff.emailOtpExpiry   = null;
+    staff.emailOtpAttempts = 0;
+    await staff.save();
+
+    logActivity({
+      staff: { _id: req.user._id, restaurantId, name: req.user.name, role: "ADMIN" },
+      action:     "STAFF_VERIFIED",
+      entityType: "Staff",
+      entityId:   staff._id,
+      newValue:   `${staff.name} email verified`,
+      req,
+    });
+
+    const safe = await Staff.findById(staff._id)
+      .select("-emailOtp -emailOtpExpiry -emailOtpAttempts -password");
+
+    return res.status(200).json({
+      success: true,
+      message: "Email verified. Staff account is now active.",
+      data:    safe,
+    });
+  } catch (err) {
+    console.error("AdminStaff verifyStaffOtp:", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// ── POST /api/admin/staff/:id/resend-otp ─────────────────────────
+exports.resendStaffOtp = async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid staff ID" });
+    }
+    const restaurantId = req.user.restaurantId;
+
+    const staff = await Staff.findOne({ _id: req.params.id, restaurantId })
+      .select("+emailOtp +emailOtpExpiry +emailOtpAttempts +isEmailVerified");
+
+    if (!staff) return res.status(404).json({ success: false, message: "Staff not found" });
+    if (staff.isEmailVerified) {
+      return res.status(400).json({ success: false, message: "Email already verified" });
+    }
+
+    const otp    = generateOtp();
+    const expiry = new Date(Date.now() + OTP_EXPIRY_MS);
+    staff.emailOtp         = otp;
+    staff.emailOtpExpiry   = expiry;
+    staff.emailOtpAttempts = 0;
+    await staff.save();
+
+    await sendOtpEmail({ to: staff.email, name: staff.name, otp });
+
+    return res.status(200).json({ success: true, message: "A new OTP has been sent to the staff member's email." });
+  } catch (err) {
+    console.error("AdminStaff resendStaffOtp:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
