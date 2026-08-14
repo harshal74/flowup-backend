@@ -1,15 +1,15 @@
 const Setting = require("../models/Setting");
+const Order   = require("../models/Order");
+const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
 
 // Get Settings
-const getSettings = async (
-  req,
-  res
-) => {
+const getSettings = async (req, res) => {
   try {
+    // Accept restaurantId from query param (customer frontend) or req.user (admin)
     const restaurantId =
       req.user?.restaurantId ||
-      process.env.RESTAURANT_ID ||
-      "FLOWUP001";
+      req.query.restaurantId ||
+      DEFAULT_RESTAURANT_ID;
 
     const settings =
       await Setting.findOne({
@@ -48,17 +48,49 @@ const updateSettings = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
 
+    // ── totalTables validation ────────────────────────────────
+    if (req.body.totalTables !== undefined) {
+      const newTotal = Number(req.body.totalTables);
+
+      if (!Number.isInteger(newTotal) || newTotal < 1 || newTotal > 200) {
+        return res.status(400).json({
+          success: false,
+          message: "Total tables must be a whole number between 1 and 200.",
+        });
+      }
+
+      // Check if we are reducing the count
+      const current = await Setting.findOne({ restaurantId }).select("totalTables");
+      const currentTotal = current?.totalTables ?? 10;
+
+      if (newTotal < currentTotal) {
+        // Find any active orders on tables that would be removed
+        const ACTIVE_STATUSES = ["PENDING", "ACCEPTED", "PREPARING", "READY", "OUT_FOR_DELIVERY"];
+        const conflictOrders = await Order.find({
+          restaurantId,
+          status:      { $in: ACTIVE_STATUSES },
+          tableNumber: { $gt: newTotal },
+        }).select("tableNumber orderNumber");
+
+        if (conflictOrders.length > 0) {
+          const tables   = [...new Set(conflictOrders.map(o => o.tableNumber))].sort((a, b) => a - b);
+          const tableStr = tables.join(", ");
+          return res.status(409).json({
+            success: false,
+            message: `Cannot reduce table count to ${newTotal} because table${tables.length > 1 ? "s" : ""} ${tableStr} currently ${tables.length > 1 ? "have" : "has"} active orders. Please complete those orders first.`,
+            conflictTables: tables,
+          });
+        }
+      }
+
+      // Store as integer
+      req.body.totalTables = newTotal;
+    }
+
     const settings = await Setting.findOneAndUpdate(
       { restaurantId },
-      {
-        ...req.body,
-        restaurantId,
-      },
-      {
-        upsert: true,
-        returnDocument: "after",
-        runValidators: true,
-      }
+      { ...req.body, restaurantId },
+      { upsert: true, new: true, runValidators: true }
     );
 
     return res.status(200).json({
@@ -68,7 +100,6 @@ const updateSettings = async (req, res) => {
     });
   } catch (error) {
     console.error("Update Settings Error:", error);
-
     return res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -84,7 +115,7 @@ const openShop = async (req, res) => {
     const settings = await Setting.findOneAndUpdate(
       { restaurantId },
       { shopOpen: true },
-      { returnDocument: "after" }
+      { new: true }  // BUG 11 FIX
     );
 
     return res.status(200).json({
@@ -110,7 +141,7 @@ const closeShop = async (req, res) => {
     const settings = await Setting.findOneAndUpdate(
       { restaurantId },
       { shopOpen: false },
-      { returnDocument: "after" }
+      { new: true }  // BUG 11 FIX
     );
 
     return res.status(200).json({

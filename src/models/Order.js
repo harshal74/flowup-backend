@@ -141,6 +141,12 @@ const orderSchema = new mongoose.Schema(
       maxlength: 500,
     },
 
+    // Optional GPS coordinates for delivery orders (set by customer frontend)
+    deliveryLocation: {
+      latitude:  { type: Number, min: -90,  max: 90  },
+      longitude: { type: Number, min: -180, max: 180 },
+    },
+
     billId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Bill",
@@ -203,6 +209,25 @@ const orderSchema = new mongoose.Schema(
       type: String,
       default: "",
       trim: true,
+    },
+
+    // Staff references — populated by the waiter app
+    acceptedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Staff",
+      default: null,
+    },
+
+    preparedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Staff",
+      default: null,
+    },
+
+    servedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Staff",
+      default: null,
     },
   },
   {

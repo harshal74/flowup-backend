@@ -1,30 +1,25 @@
 const Category = require("../models/Category");
 
-// Create Category — displayOrder is auto-assigned as max+1
+// Create Category — BUG J FIX: use req.user.restaurantId not req.body
+// displayOrder is auto-assigned as max+1
 const createCategory = async (req, res) => {
   try {
-    const { restaurantId, name, description, image } = req.body;
+    // Use authenticated admin's restaurantId — never trust req.body.restaurantId
+    const restaurantId = req.user?.restaurantId || req.body.restaurantId;
+    const { name, description, image } = req.body;
 
     if (!restaurantId || !name) {
       return res.status(400).json({
         success: false,
-        message: "Restaurant ID and category name are required",
+        message: "Category name is required",
       });
     }
 
-    const existingCategory = await Category.findOne({
-      restaurantId,
-      name: name.trim(),
-    });
-
+    const existingCategory = await Category.findOne({ restaurantId, name: name.trim() });
     if (existingCategory) {
-      return res.status(409).json({
-        success: false,
-        message: "Category already exists",
-      });
+      return res.status(409).json({ success: false, message: "Category already exists" });
     }
 
-    // Auto-assign displayOrder = current max + 1
     const last = await Category.findOne({ restaurantId })
       .sort({ displayOrder: -1 })
       .select("displayOrder");
@@ -32,17 +27,13 @@ const createCategory = async (req, res) => {
 
     const category = await Category.create({
       restaurantId,
-      name: name.trim(),
-      description: description || "",
-      image: image || "",
+      name:         name.trim(),
+      description:  description || "",
+      image:        image || "",
       displayOrder: nextOrder,
     });
 
-    return res.status(201).json({
-      success: true,
-      message: "Category created successfully",
-      data: category,
-    });
+    return res.status(201).json({ success: true, message: "Category created successfully", data: category });
   } catch (error) {
     console.error("Create Category Error:", error);
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -109,41 +100,35 @@ const getCategoryById = async (req, res) => {
   }
 };
 
-// Update Category
+// Update Category — BUG 8 FIX: whitelist fields + BUG 11 FIX: new: true
 const updateCategory = async (req, res) => {
   try {
     const { id } = req.params;
 
     const category = await Category.findById(id);
-
     if (!category) {
-      return res.status(404).json({
-        success: false,
-        message: "Category not found",
-      });
+      return res.status(404).json({ success: false, message: "Category not found" });
     }
+
+    // Only allow these fields — never let caller change restaurantId
+    const { name, description, image, displayOrder, isActive } = req.body;
+    const allowedUpdate = {};
+    if (name         !== undefined) allowedUpdate.name         = name;
+    if (description  !== undefined) allowedUpdate.description  = description;
+    if (image        !== undefined) allowedUpdate.image        = image;
+    if (displayOrder !== undefined) allowedUpdate.displayOrder = displayOrder;
+    if (isActive     !== undefined) allowedUpdate.isActive     = isActive;
 
     const updatedCategory = await Category.findByIdAndUpdate(
       id,
-      req.body,
-      {
-        returnDocument: "after",
-        runValidators: true,
-      }
+      allowedUpdate,
+      { new: true, runValidators: true }   // BUG 11 FIX: new: true
     );
 
-    return res.status(200).json({
-      success: true,
-      message: "Category updated successfully",
-      data: updatedCategory,
-    });
+    return res.status(200).json({ success: true, message: "Category updated successfully", data: updatedCategory });
   } catch (error) {
     console.error("Update Category Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 

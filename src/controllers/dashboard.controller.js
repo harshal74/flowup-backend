@@ -6,11 +6,17 @@ const Menu = require("../models/Menu");
 const getDashboardStats = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
-    const totalOrders = await Order.countDocuments({ restaurantId });
+    const totalOrders    = await Order.countDocuments({ restaurantId });
     const totalCustomers = await Customer.countDocuments({ restaurantId });
     const totalMenuItems = await Menu.countDocuments({ restaurantId });
-    const completedOrders = await Order.find({ restaurantId, status: "COMPLETED" });
-    const totalRevenue = completedOrders.reduce((sum, o) => sum + o.totalAmount, 0);
+
+    // BUG C FIX: use aggregation instead of loading all documents into memory
+    const [revenueResult] = await Order.aggregate([
+      { $match: { restaurantId, status: "COMPLETED" } },
+      { $group: { _id: null, totalRevenue: { $sum: "$totalAmount" } } },
+    ]);
+    const totalRevenue = revenueResult?.totalRevenue || 0;
+
     const pendingOrders = await Order.countDocuments({ restaurantId, status: "PENDING" });
     return res.status(200).json({
       success: true,

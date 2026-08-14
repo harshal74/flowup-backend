@@ -3,15 +3,16 @@ const Menu = require("../models/Menu");
 const Customer = require("../models/Customer");
 const Setting = require("../models/Setting");
 const { emitToRestaurant } = require("../socket");
+const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
 
 // ─────────────────────────────────────────────────────────────────
 // Create Order  (public — no auth required)
 // ─────────────────────────────────────────────────────────────────
 const createOrder = async (req, res) => {
   try {
-    const { orderType, tableNumber, customer, items, note, address } = req.body;
+    const { orderType, tableNumber, customer, items, note, address, deliveryLocation } = req.body;
 
-    const restaurantId = process.env.RESTAURANT_ID || "FLOWUP001";
+    const restaurantId = DEFAULT_RESTAURANT_ID;
 
     // ── Shop open/closed check ─────────────────────────────────
     const settings = await Setting.findOne({ restaurantId });
@@ -102,6 +103,9 @@ const createOrder = async (req, res) => {
       totalAmount: subtotalAmount,
       note: note || "",
       address: orderType === "DELIVERY" ? (address || customer.address || "") : "",
+      ...(orderType === "DELIVERY" && deliveryLocation?.latitude && deliveryLocation?.longitude
+        ? { deliveryLocation }
+        : {}),
     });
 
     // Update customer stats
@@ -154,11 +158,13 @@ const getOrders = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────
-// Get Single Order
+// Get Single Order — BUG 3 FIX: scope by restaurantId
 // ─────────────────────────────────────────────────────────────────
 const getOrderById = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id).populate("customerId", "name mobile address");
+    const restaurantId = req.user.restaurantId;
+    const order = await Order.findOne({ _id: req.params.id, restaurantId })
+      .populate("customerId", "name mobile address");
 
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
@@ -172,13 +178,12 @@ const getOrderById = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────
-// Accept Order
-// Emits  "order_status_updated"  so the admin kanban and any
-// customer order-tracking page update without polling.
+// Accept Order — BUG 4 FIX: scope by restaurantId
 // ─────────────────────────────────────────────────────────────────
 const acceptOrder = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const restaurantId = req.user.restaurantId;
+    const order = await Order.findOne({ _id: req.params.id, restaurantId });
 
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
@@ -188,7 +193,6 @@ const acceptOrder = async (req, res) => {
     order.acceptedAt = new Date();
     await order.save();
 
-    // ── Emit status update ──────────────────────────────────────
     emitToRestaurant(order.restaurantId, "order_status_updated", {
       orderId: order._id,
       status: order.status,
@@ -203,13 +207,13 @@ const acceptOrder = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────
-// Reject Order
+// Reject Order — BUG 4 FIX: scope by restaurantId
 // ─────────────────────────────────────────────────────────────────
 const rejectOrder = async (req, res) => {
   try {
     const { reason = "" } = req.body || {};
-
-    const order = await Order.findById(req.params.id);
+    const restaurantId = req.user.restaurantId;
+    const order = await Order.findOne({ _id: req.params.id, restaurantId });
 
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
@@ -220,7 +224,6 @@ const rejectOrder = async (req, res) => {
     order.rejectionReason = reason;
     await order.save();
 
-    // ── Emit status update ──────────────────────────────────────
     emitToRestaurant(order.restaurantId, "order_status_updated", {
       orderId: order._id,
       status: order.status,
@@ -236,27 +239,38 @@ const rejectOrder = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────
-// Update Order Status (general)
+// Update Order Status — BUG 4 + BUG 5 FIX: ownership + status whitelist
 // ─────────────────────────────────────────────────────────────────
+const VALID_STATUSES = [
+  "ACCEPTED", "PREPARING", "READY",
+  "OUT_FOR_DELIVERY", "COMPLETED", "REJECTED", "CANCELLED",
+];
+
 const updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
 
-    const order = await Order.findById(req.params.id);
+    // BUG 5 FIX: validate status before touching the DB
+    if (!status || !VALID_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`,
+      });
+    }
+
+    const restaurantId = req.user.restaurantId;
+    // BUG 4 FIX: scope by restaurantId
+    const order = await Order.findOne({ _id: req.params.id, restaurantId });
 
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
     order.status = status;
-
-    if (status === "COMPLETED") {
-      order.completedAt = new Date();
-    }
+    if (status === "COMPLETED") order.completedAt = new Date();
 
     await order.save();
 
-    // ── Emit status update ──────────────────────────────────────
     emitToRestaurant(order.restaurantId, "order_status_updated", {
       orderId: order._id,
       status: order.status,

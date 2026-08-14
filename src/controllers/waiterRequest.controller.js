@@ -1,11 +1,12 @@
 const WaiterRequest = require("../models/WaiterRequest");
 const { emitToRestaurant } = require("../socket");
+const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
 
 // ── Create (public — called by customer) ─────────────────────────
 const createWaiterRequest = async (req, res) => {
   try {
     const { tableNumber, customerName, orderId } = req.body;
-    const restaurantId = process.env.RESTAURANT_ID || "FLOWUP001";
+    const restaurantId = DEFAULT_RESTAURANT_ID;
 
     if (!tableNumber || tableNumber < 1) {
       return res.status(400).json({ success: false, message: "Table number is required" });
@@ -66,7 +67,7 @@ const getWaiterRequests = async (req, res) => {
   }
 };
 
-// ── Update status (admin) ─────────────────────────────────────────
+// ── Update status (admin/staff) ───────────────────────────────────
 const updateWaiterRequestStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -74,7 +75,9 @@ const updateWaiterRequestStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: "Status must be ACCEPTED or COMPLETED" });
     }
 
-    const request = await WaiterRequest.findById(req.params.id);
+    // BUG AB FIX: scope by restaurantId so cross-tenant updates are blocked
+    const restaurantId = req.user.restaurantId;
+    const request = await WaiterRequest.findOne({ _id: req.params.id, restaurantId });
     if (!request) return res.status(404).json({ success: false, message: "Not found" });
 
     request.status = status;
@@ -95,7 +98,15 @@ const updateWaiterRequestStatus = async (req, res) => {
 const deleteWaiterRequest = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
-    await WaiterRequest.findOneAndDelete({ _id: req.params.id, restaurantId });
+    // BUG 2 FIX: check if document actually existed before returning 200
+    const deleted = await WaiterRequest.findOneAndDelete({ _id: req.params.id, restaurantId });
+    if (!deleted) return res.status(404).json({ success: false, message: "Not found" });
+
+    // Notify all connected clients (admin + waiter) so they remove it immediately
+    emitToRestaurant(restaurantId, "waiter_request_updated", {
+      _id: deleted._id.toString(), status: "COMPLETED", tableNumber: deleted.tableNumber,
+    });
+
     return res.status(200).json({ success: true, message: "Dismissed" });
   } catch (error) {
     console.error("Delete Waiter Request Error:", error);
@@ -107,7 +118,20 @@ const deleteWaiterRequest = async (req, res) => {
 const deleteAllWaiterRequests = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
+    // Fetch IDs before deleting so we can emit events for each
+    const active = await WaiterRequest.find(
+      { restaurantId, status: { $in: ["PENDING", "ACCEPTED"] } },
+      "_id tableNumber"
+    );
     await WaiterRequest.deleteMany({ restaurantId, status: { $in: ["PENDING", "ACCEPTED"] } });
+
+    // Emit one event per request so all clients clean up their state
+    active.forEach(r => {
+      emitToRestaurant(restaurantId, "waiter_request_updated", {
+        _id: r._id.toString(), status: "COMPLETED", tableNumber: r.tableNumber,
+      });
+    });
+
     return res.status(200).json({ success: true, message: "All cleared" });
   } catch (error) {
     console.error("Delete All Waiter Requests Error:", error);

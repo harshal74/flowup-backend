@@ -10,19 +10,21 @@ const dashboardRoutes = require("./routes/dashboard.route");
 const settingsRoutes = require("./routes/settings.route");
 const waiterRequestRoutes = require("./routes/waiterRequest.route");
 const billingRoutes = require("./routes/billing.route");
+const staffRoutes   = require("./routes/staffRoutes");
 
 const app = express();
 
 // Allowed origins — covers dev ports + production Netlify/Railway domains.
 // Set ADMIN_ORIGIN and CUSTOMER_ORIGIN on Railway for production.
 const ALLOWED_ORIGINS = [
-  // Production (set on Railway)
   process.env.ADMIN_ORIGIN,
   process.env.CUSTOMER_ORIGIN,
+  process.env.WAITER_ORIGIN,
   // Development
   "http://localhost:5173",
   "http://localhost:5174",
   "http://localhost:5175",
+  "http://localhost:5176",   // waiter frontend
   "http://localhost:3000",
 ].filter(Boolean);
 
@@ -62,5 +64,6 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/waiter-requests", waiterRequestRoutes);
 app.use("/api/billing", billingRoutes);
+app.use("/api/staff",   staffRoutes);
 
 module.exports = { app, ALLOWED_ORIGINS };

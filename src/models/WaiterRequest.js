@@ -32,6 +32,13 @@ const waiterRequestSchema = new mongoose.Schema(
       enum: ["PENDING", "ACCEPTED", "COMPLETED"],
       default: "PENDING",
     },
+
+    // Staff reference — who resolved this request
+    resolvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Staff",
+      default: null,
+    },
   },
   {
     timestamps: true,

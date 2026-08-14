@@ -1,0 +1,36 @@
+/**
+ * Centralized environment configuration.
+ * All process.env reads go through here — never scatter them across controllers.
+ *
+ * Restaurant-specific data (UPI ID, name, logo, tables…) belongs in MongoDB.
+ * Only deployment/infrastructure settings belong here.
+ */
+
+module.exports = {
+  nodeEnv:      process.env.NODE_ENV      || "development",
+  port:         Number(process.env.PORT)  || 5000,
+  mongoUri:     process.env.MONGO_URI,
+  jwtSecret:    process.env.JWT_SECRET,
+
+  // Single-tenant deployment: the restaurant served by this backend instance.
+  // For multi-tenant, each restaurant's ID comes from auth context (req.user.restaurantId).
+  restaurantId: process.env.RESTAURANT_ID,
+
+  // CORS origins for each frontend (production values set on Render)
+  adminOrigin:    process.env.ADMIN_ORIGIN,
+  customerOrigin: process.env.CUSTOMER_ORIGIN,
+  waiterOrigin:   process.env.WAITER_ORIGIN,
+
+  // Twilio — WhatsApp notifications
+  twilioAccountSid:    process.env.TWILIO_ACCOUNT_SID,
+  twilioAuthToken:     process.env.TWILIO_AUTH_TOKEN,
+  twilioWhatsappFrom:  process.env.TWILIO_WHATSAPP_FROM,
+
+  // Nodemailer — OTP emails
+  emailHost:    process.env.EMAIL_HOST    || "smtp.gmail.com",
+  emailPort:    Number(process.env.EMAIL_PORT) || 587,
+  emailUser:    process.env.EMAIL_USER,
+  emailPass:    process.env.EMAIL_PASS,
+  emailFrom:    process.env.EMAIL_FROM,
+  otpExpiryMinutes: Number(process.env.OTP_EXPIRY_MINUTES) || 10,
+};

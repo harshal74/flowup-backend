@@ -82,6 +82,13 @@ const billSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    // Staff reference — who generated this bill
+    generatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Staff",
+      default: null,
+    },
   },
   {
     timestamps: true,

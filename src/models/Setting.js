@@ -106,6 +106,14 @@ const settingSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+
+    // Dynamic table configuration
+    totalTables: {
+      type: Number,
+      default: 10,
+      min: 1,
+      max: 200,
+    },
   },
   {
     timestamps: true,

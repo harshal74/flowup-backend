@@ -81,38 +81,18 @@ async function sendBillWhatsApp({
   customerName,
   restaurantName,
 }) {
-  console.log("====================================");
-  console.log("WhatsApp Notification");
-  console.log("====================================");
-
   const to = toWhatsAppNumber(mobile);
 
   if (!to) {
-    console.log("Invalid customer number.");
-    return {
-      success: false,
-      error: "Invalid Number",
-    };
+    return { success: false, error: "Invalid Number" };
   }
 
-  const body = buildBillMessage({
-    bill,
-    customerName,
-    restaurantName,
-  });
+  const body = buildBillMessage({ bill, customerName, restaurantName });
 
-  // Development Mode
+  // Development Mode — Twilio disabled
   if (!ENABLE_WHATSAPP) {
-    console.log("Development Mode (Twilio Disabled)");
-    console.log("Recipient :", to);
-    console.log("------------------------------------");
-    console.log(body);
-    console.log("------------------------------------");
-
-    return {
-      success: true,
-      sid: "DEV_MODE",
-    };
+    console.log(`[WhatsApp] DEV MODE — would send to ${to}, amount: ₹${bill?.grandTotal}`);
+    return { success: true, sid: "DEV_MODE" };
   }
 
   // Production
@@ -123,20 +103,12 @@ async function sendBillWhatsApp({
       body,
     });
 
-    console.log("WhatsApp Sent:", message.sid);
+    console.log(`[WhatsApp] Sent: ${message.sid}`);
 
-    return {
-      success: true,
-      sid: message.sid,
-    };
+    return { success: true, sid: message.sid };
   } catch (err) {
-    console.error("Twilio Error");
-    console.error(err);
-
-    return {
-      success: false,
-      error: err.message,
-    };
+    console.error("[WhatsApp] Send error:", err.message);
+    return { success: false, error: err.message };
   }
 }
 

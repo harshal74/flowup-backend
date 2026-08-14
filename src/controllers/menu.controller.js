@@ -1,4 +1,14 @@
-const Menu = require("../models/Menu");
+const Menu     = require("../models/Menu");
+const mongoose = require("mongoose");
+
+// Helper: validate ObjectId and return 400 if invalid
+function badId(id, res) {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    res.status(400).json({ success: false, message: "Invalid ID format" });
+    return true;
+  }
+  return false;
+}
 
 // Create Menu Item
 const createMenu = async (req, res) => {
@@ -83,6 +93,7 @@ const getPublicMenus = async (req, res) => {
 // Get Menu By Id
 const getMenuById = async (req, res) => {
   try {
+    if (badId(req.params.id, res)) return;
     const menu = await Menu.findById(req.params.id)
       .populate("categoryId", "name");
 
@@ -132,46 +143,53 @@ const getMenusByCategory = async (req, res) => {
   }
 };
 
-// Update Menu Item
+// Update Menu Item — BUG 9 FIX: whitelist fields; BUG 11 FIX: new: true
 const updateMenu = async (req, res) => {
   try {
+    if (badId(req.params.id, res)) return;
     const menu = await Menu.findById(req.params.id);
-
     if (!menu) {
-      return res.status(404).json({
-        success: false,
-        message: "Menu item not found",
-      });
+      return res.status(404).json({ success: false, message: "Menu item not found" });
     }
 
-    const updatedMenu =
-      await Menu.findByIdAndUpdate(
-        req.params.id,
-        req.body,
-        {
-          returnDocument: "after",
-          runValidators: true,
-        }
-      );
+    // Whitelist updatable fields — never allow restaurantId to be changed
+    const {
+      name, description, image, price, discountedPrice,
+      isVeg, isAvailable, isRecommended, preparationTime,
+      displayOrder, tags, categoryId,
+    } = req.body;
 
-    return res.status(200).json({
-      success: true,
-      message: "Menu updated successfully",
-      data: updatedMenu,
-    });
+    const allowed = {};
+    if (name             !== undefined) allowed.name             = name;
+    if (description      !== undefined) allowed.description      = description;
+    if (image            !== undefined) allowed.image            = image;
+    if (price            !== undefined) allowed.price            = price;
+    if (discountedPrice  !== undefined) allowed.discountedPrice  = discountedPrice;
+    if (isVeg            !== undefined) allowed.isVeg            = isVeg;
+    if (isAvailable      !== undefined) allowed.isAvailable      = isAvailable;
+    if (isRecommended    !== undefined) allowed.isRecommended    = isRecommended;
+    if (preparationTime  !== undefined) allowed.preparationTime  = preparationTime;
+    if (displayOrder     !== undefined) allowed.displayOrder     = displayOrder;
+    if (tags             !== undefined) allowed.tags             = tags;
+    if (categoryId       !== undefined) allowed.categoryId       = categoryId;
+
+    const updatedMenu = await Menu.findByIdAndUpdate(
+      req.params.id,
+      allowed,
+      { new: true, runValidators: true }  // BUG 11 FIX: new: true
+    );
+
+    return res.status(200).json({ success: true, message: "Menu updated successfully", data: updatedMenu });
   } catch (error) {
     console.error("Update Menu Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
 // Delete Menu Item
 const deleteMenu = async (req, res) => {
   try {
+    if (badId(req.params.id, res)) return;
     const menu = await Menu.findById(req.params.id);
 
     if (!menu) {
@@ -200,6 +218,7 @@ const deleteMenu = async (req, res) => {
 // Toggle Availability
 const toggleAvailability = async (req, res) => {
   try {
+    if (badId(req.params.id, res)) return;
     const menu = await Menu.findById(req.params.id);
 
     if (!menu) {
@@ -235,6 +254,7 @@ const toggleAvailability = async (req, res) => {
 // Toggle Recommended
 const toggleRecommendation = async (req, res) => {
   try {
+    if (badId(req.params.id, res)) return;
     const menu = await Menu.findById(req.params.id);
 
     if (!menu) {

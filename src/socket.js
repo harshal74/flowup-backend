@@ -12,6 +12,7 @@ function initSocket(httpServer, allowedOrigins) {
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:5175",
+    "http://localhost:5176",  // waiter frontend dev port
     "http://localhost:3000",
   ].filter(Boolean);
 
@@ -40,14 +41,13 @@ function initSocket(httpServer, allowedOrigins) {
     }
 
     socket.join(restaurantId);
-    console.log(`[Socket] Connected: ${socket.id}  restaurant: ${restaurantId}`);
 
     socket.on("disconnect", () => {
-      console.log(`[Socket] Disconnected: ${socket.id}  restaurant: ${restaurantId}`);
+      // disconnect logged at debug level only
     });
   });
 
-  console.log("[Socket] Socket.IO server initialised");
+  console.log("[Socket] Socket.IO initialised");
   return io;
 }
 
