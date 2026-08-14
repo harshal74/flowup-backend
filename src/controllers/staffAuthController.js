@@ -2,6 +2,7 @@ const bcrypt = require("bcryptjs");
 const jwt    = require("jsonwebtoken");
 const Staff  = require("../models/Staff");
 const { generateOtp, sendOtpEmail } = require("../services/emailService");
+const { logActivity } = require("../services/staffActivityService");
 
 const EMAIL_RE  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^\+?\d{7,15}$/;
@@ -248,7 +249,6 @@ exports.resendOtp = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
-
     if (!email || !password) {
       return res.status(400).json({ success: false, message: "Email and password are required" });
     }
@@ -294,6 +294,16 @@ exports.login = async (req, res) => {
 
     staff.lastLogin = new Date();
     await staff.save();
+
+    // Log login activity (fire-and-forget)
+    logActivity({
+      staff: { _id: staff._id, restaurantId: staff.restaurantId, name: staff.name, role: staff.role },
+      action: "LOGIN",
+      entityType: "Staff",
+      entityId: staff._id,
+      newValue: "Logged in",
+      req,
+    });
 
     return res.status(200).json({
       success: true,

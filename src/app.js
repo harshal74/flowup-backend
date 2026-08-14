@@ -11,6 +11,7 @@ const settingsRoutes = require("./routes/settings.route");
 const waiterRequestRoutes = require("./routes/waiterRequest.route");
 const billingRoutes = require("./routes/billing.route");
 const staffRoutes   = require("./routes/staffRoutes");
+const adminStaffRoutes = require("./routes/adminStaff.route");
 
 const app = express();
 
@@ -65,5 +66,6 @@ app.use("/api/settings", settingsRoutes);
 app.use("/api/waiter-requests", waiterRequestRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/staff",   staffRoutes);
+app.use("/api/admin/staff", adminStaffRoutes);
 
 module.exports = { app, ALLOWED_ORIGINS };
