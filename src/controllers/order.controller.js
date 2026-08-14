@@ -1,7 +1,8 @@
-const Order = require("../models/Order");
-const Menu = require("../models/Menu");
+const Order    = require("../models/Order");
+const Menu     = require("../models/Menu");
+const Category = require("../models/Category");
 const Customer = require("../models/Customer");
-const Setting = require("../models/Setting");
+const Setting  = require("../models/Setting");
 const { emitToRestaurant } = require("../socket");
 const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
 
@@ -72,6 +73,17 @@ const createOrder = async (req, res) => {
 
       if (!menuItem.isAvailable) {
         return res.status(400).json({ success: false, message: `${menuItem.name} is currently unavailable` });
+      }
+
+      // Check that the menu item's category is active
+      if (menuItem.categoryId) {
+        const category = await Category.findById(menuItem.categoryId).select("isActive name");
+        if (category && !category.isActive) {
+          return res.status(400).json({
+            success: false,
+            message: `"${category.name}" category is currently unavailable. Please remove items from this category and try again.`,
+          });
+        }
       }
 
       const price = menuItem.discountedPrice || menuItem.price;
