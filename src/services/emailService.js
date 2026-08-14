@@ -26,8 +26,10 @@ function createTransporter() {
     port:   Number(process.env.EMAIL_PORT) || 587,
     secure: false, // STARTTLS on port 587
     auth: { user, pass },
+    connectionTimeout: 10000, // 10s — never hangs the request indefinitely
+    greetingTimeout:   10000,
+    socketTimeout:     15000,
     tls: {
-      // Required for some Gmail configurations
       rejectUnauthorized: false,
     },
   });
@@ -53,17 +55,6 @@ async function sendOtpEmail({ to, name, otp }) {
   }
 
   const from = process.env.EMAIL_FROM || `"FlowUp Staff" <${process.env.EMAIL_USER}>`;
-
-  try {
-    // Verify SMTP connection before attempting to send
-    await transporter.verify();
-    console.log("[Email] SMTP connection verified ✓");
-  } catch (verifyErr) {
-    console.error("[Email] SMTP verify failed:", verifyErr.message);
-    // Fall back to console so dev workflow isn't blocked
-    console.log(`[Email] FALLBACK OTP for ${to}: ${otp}`);
-    return { success: false, error: `SMTP verify: ${verifyErr.message}` };
-  }
 
   try {
     const info = await transporter.sendMail({
@@ -115,7 +106,13 @@ async function testSmtpConnection() {
     return { ok: false, reason: "SMTP not configured — EMAIL_USER or EMAIL_PASS missing in .env" };
   }
   try {
-    await transporter.verify();
+    // 8-second timeout so the test endpoint doesn't hang
+    await Promise.race([
+      transporter.verify(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("SMTP verify timed out after 8s")), 8000)
+      ),
+    ]);
     return { ok: true, user: process.env.EMAIL_USER };
   } catch (err) {
     return { ok: false, reason: err.message, code: err.code };
