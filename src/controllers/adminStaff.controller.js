@@ -14,8 +14,12 @@ const { generateOtp, sendOtpEmail } = require("../services/emailService");
 const EMAIL_RE  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^\+?\d{7,15}$/;
 const MANAGEABLE_ROLES = ["CHEF", "WAITER", "ASSISTANT"];
-const OTP_EXPIRY_MS    = (Number(process.env.OTP_EXPIRY_MINUTES) || 10) * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
+
+// Evaluated at runtime so env vars loaded after module init are picked up
+function getOtpExpiryMs() {
+  return (Number(process.env.OTP_EXPIRY_MINUTES) || 10) * 60 * 1000;
+}
 
 // ── Helper ────────────────────────────────────────────────────────
 function isValidId(id) {
@@ -135,7 +139,7 @@ exports.createStaff = async (req, res) => {
     if (existing) {
       if (!existing.isEmailVerified) {
         const otp    = generateOtp();
-        const expiry = new Date(Date.now() + OTP_EXPIRY_MS);
+        const expiry = new Date(Date.now() + getOtpExpiryMs());
         existing.emailOtp         = otp;
         existing.emailOtpExpiry   = expiry;
         existing.emailOtpAttempts = 0;
@@ -171,7 +175,7 @@ exports.createStaff = async (req, res) => {
     // Create unverified account
     const hashed = await bcrypt.hash(password, 10);
     const otp    = generateOtp();
-    const expiry = new Date(Date.now() + OTP_EXPIRY_MS);
+    const expiry = new Date(Date.now() + getOtpExpiryMs());
 
     const staff = await Staff.create({
       restaurantId,
@@ -314,7 +318,7 @@ exports.resendStaffOtp = async (req, res) => {
     }
 
     const otp    = generateOtp();
-    const expiry = new Date(Date.now() + OTP_EXPIRY_MS);
+    const expiry = new Date(Date.now() + getOtpExpiryMs());
     staff.emailOtp         = otp;
     staff.emailOtpExpiry   = expiry;
     staff.emailOtpAttempts = 0;
