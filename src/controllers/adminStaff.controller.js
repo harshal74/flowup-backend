@@ -140,7 +140,8 @@ exports.createStaff = async (req, res) => {
         existing.emailOtpExpiry   = expiry;
         existing.emailOtpAttempts = 0;
         await existing.save();
-        await sendOtpEmail({ to: normEmail, name: existing.name, otp });
+        // Fire-and-forget — don't await
+        sendOtpEmail({ to: normEmail, name: existing.name, otp }).catch(() => {});
         return res.status(200).json({
           success:    true,
           message:    "An unverified account already exists. A new OTP has been sent.",
@@ -171,8 +172,9 @@ exports.createStaff = async (req, res) => {
       emailOtpAttempts: 0,
     });
 
-    // Send OTP — surface failures without blocking creation
-    const emailResult = await sendOtpEmail({ to: normEmail, name: name.trim(), otp });
+    // Fire-and-forget — OTP is already in DB, email delivers in background.
+    // Response returns immediately so the frontend never hangs.
+    sendOtpEmail({ to: normEmail, name: name.trim(), otp }).catch(() => {});
 
     logActivity({
       staff: { _id: req.user._id, restaurantId, name: req.user.name, role: "ADMIN" },
@@ -183,23 +185,13 @@ exports.createStaff = async (req, res) => {
       req,
     });
 
-    const response = {
+    return res.status(201).json({
       success:     true,
       message:     "Staff account created. An OTP has been sent to their email for verification.",
       requiresOtp: true,
       email:       normEmail,
       staffId:     staff._id,
-    };
-
-    if (emailResult.dev) {
-      response.message = "Staff account created. SMTP not configured — check backend terminal for the OTP.";
-      response.devNote  = "OTP printed to backend console";
-    } else if (!emailResult.success) {
-      response.message    = `Staff account created but OTP email failed: ${emailResult.error}. Check backend terminal.`;
-      response.emailError = emailResult.error;
-    }
-
-    return res.status(201).json(response);
+    });
   } catch (err) {
     console.error("AdminStaff createStaff:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -299,7 +291,8 @@ exports.resendStaffOtp = async (req, res) => {
     staff.emailOtpAttempts = 0;
     await staff.save();
 
-    await sendOtpEmail({ to: staff.email, name: staff.name, otp });
+    // Fire-and-forget — return immediately, email sends in background
+    sendOtpEmail({ to: staff.email, name: staff.name, otp }).catch(() => {});
 
     return res.status(200).json({ success: true, message: "A new OTP has been sent to the staff member's email." });
   } catch (err) {

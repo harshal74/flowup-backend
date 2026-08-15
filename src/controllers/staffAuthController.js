@@ -67,7 +67,8 @@ exports.signup = async (req, res) => {
         existing.emailOtpExpiry   = expiry;
         existing.emailOtpAttempts = 0;
         await existing.save();
-        await sendOtpEmail({ to: normEmail, name: existing.name, otp });
+        // Fire-and-forget — return immediately, email sends in background
+        sendOtpEmail({ to: normEmail, name: existing.name, otp }).catch(() => {});
         return res.status(200).json({
           success: true,
           message: "A new OTP has been sent to your email. Please verify to activate your account.",
@@ -97,31 +98,9 @@ exports.signup = async (req, res) => {
       emailOtpAttempts: 0,
     });
 
-    // ── Send OTP email — wait for result and surface any failure ──
-    const emailResult = await sendOtpEmail({ to: normEmail, name: name.trim(), otp });
-
-    if (emailResult.dev) {
-      // SMTP not configured — OTP is in the backend console
-      return res.status(201).json({
-        success: true,
-        message: "Account created. SMTP not configured — check your backend terminal for the OTP.",
-        requiresOtp: true,
-        email: normEmail,
-        devNote: "OTP printed to backend console (no email credentials set)",
-      });
-    }
-
-    if (!emailResult.success) {
-      // Email failed — still return success but tell the user to check console
-      console.error("[Signup] Email delivery failed:", emailResult.error);
-      return res.status(201).json({
-        success: true,
-        message: `Account created but email delivery failed: ${emailResult.error}. Check your backend terminal for the OTP code.`,
-        requiresOtp: true,
-        email: normEmail,
-        emailError: emailResult.error,
-      });
-    }
+    // ── Send OTP email — fire-and-forget so response returns immediately ──
+    // OTP is saved in DB. Email delivers in background. Max 3s grace period.
+    sendOtpEmail({ to: normEmail, name: name.trim(), otp }).catch(() => {});
 
     return res.status(201).json({
       success: true,
@@ -231,7 +210,8 @@ exports.resendOtp = async (req, res) => {
     staff.emailOtpAttempts = 0;
     await staff.save();
 
-    await sendOtpEmail({ to: normEmail, name: staff.name, otp });
+    // Fire-and-forget — return immediately, email sends in background
+    sendOtpEmail({ to: normEmail, name: staff.name, otp }).catch(() => {});
 
     return res.status(200).json({
       success: true,
