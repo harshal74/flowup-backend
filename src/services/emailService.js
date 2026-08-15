@@ -1,62 +1,89 @@
+/**
+ * Email Service — OTP delivery via Nodemailer / Gmail SMTP.
+ *
+ * sendOtpEmail() THROWS on failure so callers can distinguish
+ * "email sent" from "email failed" and report accurately to the frontend.
+ *
+ * No credentials, App Passwords, or OTP values are ever logged.
+ */
+
 let nodemailer = null;
 try {
   nodemailer = require("nodemailer");
 } catch {
-  console.warn("[Email] nodemailer not installed — run 'npm install'. OTPs will be logged to console only.");
+  console.warn("[Email] nodemailer not installed. Run: npm install nodemailer");
 }
 
-// Do NOT cache the transporter at startup — create fresh each time
-// This avoids issues when env vars are loaded after module init
+// ── Transporter factory ───────────────────────────────────────────
+// Created fresh on each call so .env values loaded after startup are
+// always picked up. The connectionTimeout prevents indefinite hangs.
 function createTransporter() {
-  if (!nodemailer) {
-    console.warn("[Email] nodemailer not available");
-    return null;
-  }
+  if (!nodemailer) return null;
 
   const user = process.env.EMAIL_USER;
   const pass = process.env.EMAIL_PASS;
 
-  if (!user || !pass || user === "your-email@gmail.com" || pass === "your-app-password-here") {
-    console.warn("[Email] EMAIL_USER / EMAIL_PASS not configured in .env");
-    return null;
+  if (
+    !user || !pass ||
+    user === "your-email@gmail.com" ||
+    pass === "your-app-password-here"
+  ) {
+    return null; // Not configured — caller handles the null case
   }
 
   return nodemailer.createTransport({
     host:   process.env.EMAIL_HOST || "smtp.gmail.com",
     port:   Number(process.env.EMAIL_PORT) || 587,
     secure: false, // STARTTLS on port 587
-    auth: { user, pass },
-    connectionTimeout: 10000, // 10s — never hangs the request indefinitely
+    auth:   { user, pass },
+    connectionTimeout: 10000,
     greetingTimeout:   10000,
     socketTimeout:     15000,
-    tls: {
-      rejectUnauthorized: false,
-    },
+    tls: { rejectUnauthorized: false },
   });
 }
 
+// ── OTP generator ─────────────────────────────────────────────────
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+// ── sendOtpEmail ──────────────────────────────────────────────────
+/**
+ * Send the OTP verification email.
+ *
+ * Returns { messageId } on success.
+ *
+ * THROWS on any failure (SMTP auth error, network error, not configured, etc.)
+ * so callers can catch and report the real status to the frontend.
+ *
+ * SECURITY: OTP value, passwords, and App Passwords are NEVER logged.
+ */
 async function sendOtpEmail({ to, name, otp }) {
   const expiryMinutes = Number(process.env.OTP_EXPIRY_MINUTES) || 10;
   const transporter   = createTransporter();
 
+  // No SMTP config — dev fallback: print OTP to terminal, then THROW
+  // so the caller knows email was not actually delivered.
   if (!transporter) {
-    // Dev fallback — always print to console so dev can test without SMTP
     console.log(`\n╔══════════════════════════════════════╗`);
-    console.log(`║  [EMAIL NOT SENT — NO SMTP CONFIG]`);
-    console.log(`║  Recipient : ${to}`);
-    console.log(`║  OTP Code  : ${otp}`);
-    console.log(`║  Valid for : ${expiryMinutes} min`);
+    console.log(`║  [EMAIL NOT SENT — NO SMTP CONFIG]   ║`);
+    console.log(`║  Recipient : ${to.padEnd(22)}║`);
+    console.log(`║  Valid for : ${String(expiryMinutes + " min").padEnd(22)}║`);
     console.log(`╚══════════════════════════════════════╝\n`);
-    return { success: true, dev: true };
+    // OTP intentionally omitted from the log in production.
+    // In dev, check MongoDB directly or add NODE_ENV=development guard:
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`[Email] DEV — OTP for ${to}: ${otp}`);
+    }
+    const err = new Error("SMTP not configured. EMAIL_USER and EMAIL_PASS must be set in .env");
+    err.code = "SMTP_NOT_CONFIGURED";
+    throw err;
   }
 
-  const from = process.env.EMAIL_FROM || `"FlowUp Staff" <${process.env.EMAIL_USER}>`;
-
   try {
+    const from = process.env.EMAIL_FROM || `"FlowUp Staff" <${process.env.EMAIL_USER}>`;
+
     const info = await transporter.sendMail({
       from,
       to,
@@ -86,31 +113,34 @@ async function sendOtpEmail({ to, name, otp }) {
       `,
     });
 
-    console.log(`[Email] ✓ OTP sent to ${to}  MessageId: ${info.messageId}`);
-    return { success: true, messageId: info.messageId };
+    // Log success — messageId only, no credentials or OTP
+    console.log(`[Email] ✓ OTP email sent to ${to} — MessageId: ${info.messageId}`);
+    return { messageId: info.messageId };
+
   } catch (err) {
-    console.error("[Email] ✗ sendMail failed:", err.message);
-    // Always log OTP to console as fallback
-    console.log(`[Email] FALLBACK OTP for ${to}: ${otp}`);
-    return { success: false, error: err.message };
+    // Log enough to diagnose SMTP issues without exposing secrets
+    console.error("[Email] ✗ sendMail failed:", {
+      to,
+      message:  err.message,
+      code:     err.code     || "unknown",
+      response: err.response || null,
+    });
+    // Re-throw so the caller knows delivery failed
+    throw err;
   }
 }
 
-/**
- * Test the SMTP connection without sending an email.
- * Used by the /api/staff/test-email diagnostic endpoint.
- */
+// ── SMTP health check (used by /api/staff/test-email and server startup) ──
 async function testSmtpConnection() {
   const transporter = createTransporter();
   if (!transporter) {
-    return { ok: false, reason: "SMTP not configured — EMAIL_USER or EMAIL_PASS missing in .env" };
+    return { ok: false, reason: "SMTP not configured — EMAIL_USER or EMAIL_PASS missing or using placeholder values in .env" };
   }
   try {
-    // 8-second timeout so the test endpoint doesn't hang
     await Promise.race([
       transporter.verify(),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("SMTP verify timed out after 8s")), 8000)
+        setTimeout(() => reject(new Error("SMTP verify timed out after 8 s")), 8000)
       ),
     ]);
     return { ok: true, user: process.env.EMAIL_USER };

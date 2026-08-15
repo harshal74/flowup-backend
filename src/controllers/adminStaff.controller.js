@@ -131,7 +131,7 @@ exports.createStaff = async (req, res) => {
     const existing  = await Staff.findOne({ email: normEmail })
       .select("+emailOtp +emailOtpExpiry +isEmailVerified");
 
-    // If an unverified account already exists (e.g., re-adding), resend OTP
+    // If an unverified account already exists (e.g., re-adding), regenerate + resend OTP
     if (existing) {
       if (!existing.isEmailVerified) {
         const otp    = generateOtp();
@@ -140,15 +140,30 @@ exports.createStaff = async (req, res) => {
         existing.emailOtpExpiry   = expiry;
         existing.emailOtpAttempts = 0;
         await existing.save();
-        // Fire-and-forget — don't await
-        sendOtpEmail({ to: normEmail, name: existing.name, otp }).catch(() => {});
-        return res.status(200).json({
-          success:    true,
-          message:    "An unverified account already exists. A new OTP has been sent.",
-          requiresOtp: true,
-          email:      normEmail,
-          staffId:    existing._id,
-        });
+
+        try {
+          await sendOtpEmail({ to: normEmail, name: existing.name, otp });
+          return res.status(200).json({
+            success:     true,
+            requiresOtp: true,
+            emailSent:   true,
+            email:       normEmail,
+            staffId:     existing._id,
+            message:     "An unverified account already exists. A new OTP has been sent to their email.",
+          });
+        } catch (emailErr) {
+          console.error("[createStaff] OTP resend failed for existing account:", {
+            staffId: existing._id, message: emailErr.message, code: emailErr.code,
+          });
+          return res.status(200).json({
+            success:     true,
+            requiresOtp: true,
+            emailSent:   false,
+            email:       normEmail,
+            staffId:     existing._id,
+            message:     "An unverified account already exists, but the OTP email could not be sent. Please check the email configuration and use Resend OTP.",
+          });
+        }
       }
       return res.status(409).json({ success: false, message: "Email already registered" });
     }
@@ -166,15 +181,11 @@ exports.createStaff = async (req, res) => {
       password:         hashed,
       role,
       isEmailVerified:  false,
-      isActive:         false,   // activated after OTP verification
+      isActive:         false,
       emailOtp:         otp,
       emailOtpExpiry:   expiry,
       emailOtpAttempts: 0,
     });
-
-    // Fire-and-forget — OTP is already in DB, email delivers in background.
-    // Response returns immediately so the frontend never hangs.
-    sendOtpEmail({ to: normEmail, name: name.trim(), otp }).catch(() => {});
 
     logActivity({
       staff: { _id: req.user._id, restaurantId, name: req.user.name, role: "ADMIN" },
@@ -185,13 +196,31 @@ exports.createStaff = async (req, res) => {
       req,
     });
 
-    return res.status(201).json({
-      success:     true,
-      message:     "Staff account created. An OTP has been sent to their email for verification.",
-      requiresOtp: true,
-      email:       normEmail,
-      staffId:     staff._id,
-    });
+    // Send OTP — await so we can report delivery status accurately
+    try {
+      await sendOtpEmail({ to: normEmail, name: name.trim(), otp });
+      return res.status(201).json({
+        success:     true,
+        requiresOtp: true,
+        emailSent:   true,
+        email:       normEmail,
+        staffId:     staff._id,
+        message:     "Staff account created. An OTP has been sent to their email for verification.",
+      });
+    } catch (emailErr) {
+      console.error("[createStaff] OTP email failed:", {
+        staffId: staff._id, message: emailErr.message, code: emailErr.code,
+      });
+      // Account exists in DB with OTP saved — admin can use Resend OTP
+      return res.status(201).json({
+        success:     true,
+        requiresOtp: true,
+        emailSent:   false,
+        email:       normEmail,
+        staffId:     staff._id,
+        message:     "Staff account was created, but the OTP email could not be sent. Please check the email configuration and use Resend OTP.",
+      });
+    }
   } catch (err) {
     console.error("AdminStaff createStaff:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -291,10 +320,23 @@ exports.resendStaffOtp = async (req, res) => {
     staff.emailOtpAttempts = 0;
     await staff.save();
 
-    // Fire-and-forget — return immediately, email sends in background
-    sendOtpEmail({ to: staff.email, name: staff.name, otp }).catch(() => {});
-
-    return res.status(200).json({ success: true, message: "A new OTP has been sent to the staff member's email." });
+    try {
+      await sendOtpEmail({ to: staff.email, name: staff.name, otp });
+      return res.status(200).json({
+        success:   true,
+        emailSent: true,
+        message:   "A new OTP has been sent to the staff member's email.",
+      });
+    } catch (emailErr) {
+      console.error("[resendStaffOtp] OTP email failed:", {
+        staffId: staff._id, message: emailErr.message, code: emailErr.code,
+      });
+      return res.status(200).json({
+        success:   true,
+        emailSent: false,
+        message:   "A new OTP was generated, but the email could not be sent. Please check the email configuration.",
+      });
+    }
   } catch (err) {
     console.error("AdminStaff resendStaffOtp:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
