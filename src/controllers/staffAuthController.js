@@ -178,7 +178,7 @@ exports.login = async (req, res) => {
     const token = jwt.sign(
       { staffId: staff._id, restaurantId: staff.restaurantId, role: staff.role },
       process.env.JWT_SECRET,
-      { expiresIn: "7d" }
+      { expiresIn: "24h" }
     );
 
     staff.lastLogin = new Date();
