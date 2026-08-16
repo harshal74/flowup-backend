@@ -26,11 +26,5 @@ module.exports = {
   twilioAuthToken:     process.env.TWILIO_AUTH_TOKEN,
   twilioWhatsappFrom:  process.env.TWILIO_WHATSAPP_FROM,
 
-  // Nodemailer — OTP emails
-  emailHost:    process.env.EMAIL_HOST    || "smtp.gmail.com",
-  emailPort:    Number(process.env.EMAIL_PORT) || 587,
-  emailUser:    process.env.EMAIL_USER,
-  emailPass:    process.env.EMAIL_PASS,
-  emailFrom:    process.env.EMAIL_FROM,
-  otpExpiryMinutes: Number(process.env.OTP_EXPIRY_MINUTES) || 10,
+  // (Email/OTP config removed — staff uses admin approval workflow)
 };

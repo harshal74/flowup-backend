@@ -9,17 +9,10 @@ const mongoose      = require("mongoose");
 const Staff         = require("../models/Staff");
 const StaffActivity = require("../models/StaffActivity");
 const { logActivity }  = require("../services/staffActivityService");
-const { generateOtp, sendOtpEmail } = require("../services/emailService");
 
 const EMAIL_RE  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^\+?\d{7,15}$/;
 const MANAGEABLE_ROLES = ["CHEF", "WAITER", "ASSISTANT"];
-const MAX_OTP_ATTEMPTS = 5;
-
-// Evaluated at runtime so env vars loaded after module init are picked up
-function getOtpExpiryMs() {
-  return (Number(process.env.OTP_EXPIRY_MINUTES) || 10) * 60 * 1000;
-}
 
 // ── Helper ────────────────────────────────────────────────────────
 function isValidId(id) {
@@ -36,14 +29,15 @@ exports.getStaff = async (req, res) => {
     const filter = {
       restaurantId,
       role: { $in: MANAGEABLE_ROLES },
+      status: { $in: ["ACTIVE", "BLOCKED"] }, // Only show approved staff in main list
     };
 
     if (role && MANAGEABLE_ROLES.includes(role)) {
       filter.role = role;
     }
 
-    if (status === "active")  filter.isActive = true;
-    if (status === "blocked") filter.isActive = false;
+    if (status === "active")  { filter.status = "ACTIVE"; filter.isActive = true; }
+    if (status === "blocked") { filter.status = "BLOCKED"; filter.isActive = false; }
 
     if (search && search.trim()) {
       const q = search.trim();
@@ -59,16 +53,17 @@ exports.getStaff = async (req, res) => {
 
     const staffList = await Staff
       .find(filter)
-      .select("-emailOtp -emailOtpExpiry -emailOtpAttempts -password")
+      .select("-password")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit));
 
-    // Summary counts (unfiltered)
-    const [totalCount, activeCount, blockedCount] = await Promise.all([
-      Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES } }),
-      Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, isActive: true }),
-      Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, isActive: false }),
+    // Summary counts (unfiltered — active/blocked only)
+    const [totalCount, activeCount, blockedCount, pendingCount] = await Promise.all([
+      Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, status: { $in: ["ACTIVE", "BLOCKED"] } }),
+      Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, status: "ACTIVE" }),
+      Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, status: "BLOCKED" }),
+      Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, status: "PENDING" }),
     ]);
 
     return res.status(200).json({
@@ -77,10 +72,82 @@ exports.getStaff = async (req, res) => {
       total,
       page:    Number(page),
       limit:   Number(limit),
-      summary: { total: totalCount, active: activeCount, blocked: blockedCount },
+      summary: { total: totalCount, active: activeCount, blocked: blockedCount, pending: pendingCount },
     });
   } catch (err) {
     console.error("AdminStaff getStaff:", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// ── GET /api/admin/staff/pending ──────────────────────────────────
+// List pending registration requests for this restaurant.
+exports.getPendingRequests = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const { page = 1, limit = 50 } = req.query;
+
+    const filter = {
+      restaurantId,
+      role: { $in: MANAGEABLE_ROLES },
+      status: "PENDING",
+    };
+
+    const skip  = (Number(page) - 1) * Number(limit);
+    const total = await Staff.countDocuments(filter);
+
+    const requests = await Staff
+      .find(filter)
+      .select("name email mobile role status createdAt restaurantId")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit));
+
+    return res.status(200).json({
+      success: true,
+      data:    requests,
+      total,
+      page:    Number(page),
+      limit:   Number(limit),
+    });
+  } catch (err) {
+    console.error("AdminStaff getPendingRequests:", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// ── GET /api/admin/staff/rejected ─────────────────────────────────
+// List rejected registration requests for this restaurant.
+exports.getRejectedRequests = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const { page = 1, limit = 50 } = req.query;
+
+    const filter = {
+      restaurantId,
+      role: { $in: MANAGEABLE_ROLES },
+      status: "REJECTED",
+    };
+
+    const skip  = (Number(page) - 1) * Number(limit);
+    const total = await Staff.countDocuments(filter);
+
+    const requests = await Staff
+      .find(filter)
+      .select("name email mobile role status createdAt rejectionReason reviewedAt restaurantId")
+      .sort({ reviewedAt: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit));
+
+    return res.status(200).json({
+      success: true,
+      data:    requests,
+      total,
+      page:    Number(page),
+      limit:   Number(limit),
+    });
+  } catch (err) {
+    console.error("AdminStaff getRejectedRequests:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
@@ -94,7 +161,7 @@ exports.getStaffById = async (req, res) => {
     const restaurantId = req.user.restaurantId;
     const staff = await Staff
       .findOne({ _id: req.params.id, restaurantId, role: { $in: MANAGEABLE_ROLES } })
-      .select("-emailOtp -emailOtpExpiry -emailOtpAttempts -password");
+      .select("-password");
 
     if (!staff) return res.status(404).json({ success: false, message: "Staff not found" });
 
@@ -106,8 +173,7 @@ exports.getStaffById = async (req, res) => {
 };
 
 // ── POST /api/admin/staff ─────────────────────────────────────────
-// Admin creates a staff account → sends OTP email for verification.
-// The account is unverified/inactive until OTP is confirmed.
+// Admin creates a staff account directly → status = ACTIVE immediately.
 exports.createStaff = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
@@ -132,63 +198,29 @@ exports.createStaff = async (req, res) => {
     }
 
     const normEmail = email.toLowerCase().trim();
-    const existing  = await Staff.findOne({ email: normEmail })
-      .select("+emailOtp +emailOtpExpiry +isEmailVerified");
+    const existing  = await Staff.findOne({ email: normEmail });
 
-    // If an unverified account already exists (e.g., re-adding), regenerate + resend OTP
     if (existing) {
-      if (!existing.isEmailVerified) {
-        const otp    = generateOtp();
-        const expiry = new Date(Date.now() + getOtpExpiryMs());
-        existing.emailOtp         = otp;
-        existing.emailOtpExpiry   = expiry;
-        existing.emailOtpAttempts = 0;
-        await existing.save();
-
-        try {
-          await sendOtpEmail({ to: normEmail, name: existing.name, otp });
-          return res.status(200).json({
-            success:     true,
-            requiresOtp: true,
-            emailSent:   true,
-            email:       normEmail,
-            staffId:     existing._id,
-            message:     "An unverified account already exists. A new OTP has been sent to their email.",
-          });
-        } catch (emailErr) {
-          console.error("[createStaff] OTP resend failed for existing account:", {
-            staffId: existing._id, message: emailErr.message, code: emailErr.code,
-          });
-          return res.status(200).json({
-            success:     true,
-            requiresOtp: true,
-            emailSent:   false,
-            email:       normEmail,
-            staffId:     existing._id,
-            message:     "An unverified account already exists, but the OTP email could not be sent. Please check the email configuration and use Resend OTP.",
-          });
-        }
+      if (existing.status === "PENDING") {
+        return res.status(409).json({ success: false, message: "A pending request with this email already exists. Approve it instead." });
       }
       return res.status(409).json({ success: false, message: "Email already registered" });
     }
 
-    // Create unverified account
+    // Create active account directly (admin-created staff are immediately active)
     const hashed = await bcrypt.hash(password, 10);
-    const otp    = generateOtp();
-    const expiry = new Date(Date.now() + getOtpExpiryMs());
 
     const staff = await Staff.create({
       restaurantId,
-      name:             name.trim(),
-      email:            normEmail,
-      mobile:           mobile.trim().replace(/\s/g, ""),
-      password:         hashed,
+      name:            name.trim(),
+      email:           normEmail,
+      mobile:          mobile.trim().replace(/\s/g, ""),
+      password:        hashed,
       role,
-      isEmailVerified:  false,
-      isActive:         false,
-      emailOtp:         otp,
-      emailOtpExpiry:   expiry,
-      emailOtpAttempts: 0,
+      status:          "ACTIVE",
+      isActive:        true,
+      isEmailVerified: true,
+      createdBy:       req.user._id,
     });
 
     logActivity({
@@ -196,153 +228,157 @@ exports.createStaff = async (req, res) => {
       action:     "STAFF_CREATED",
       entityType: "Staff",
       entityId:   staff._id,
-      newValue:   `${staff.name} (${staff.role}) — pending OTP verification`,
+      newValue:   `${staff.name} (${staff.role}) — active`,
       req,
     });
 
-    // Send OTP — await so we can report delivery status accurately
-    try {
-      await sendOtpEmail({ to: normEmail, name: name.trim(), otp });
-      return res.status(201).json({
-        success:     true,
-        requiresOtp: true,
-        emailSent:   true,
-        email:       normEmail,
-        staffId:     staff._id,
-        message:     "Staff account created. An OTP has been sent to their email for verification.",
-      });
-    } catch (emailErr) {
-      console.error("[createStaff] OTP email failed:", {
-        staffId: staff._id, message: emailErr.message, code: emailErr.code,
-      });
-      // Account exists in DB with OTP saved — admin can use Resend OTP
-      return res.status(201).json({
-        success:     true,
-        requiresOtp: true,
-        emailSent:   false,
-        email:       normEmail,
-        staffId:     staff._id,
-        message:     "Staff account was created, but the OTP email could not be sent. Please check the email configuration and use Resend OTP.",
-      });
-    }
+    const safe = await Staff.findById(staff._id).select("-password");
+    return res.status(201).json({
+      success: true,
+      message: "Staff account created and activated.",
+      data:    safe,
+    });
   } catch (err) {
     console.error("AdminStaff createStaff:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
-// ── POST /api/admin/staff/:id/verify-otp ─────────────────────────
-// Admin verifies the OTP for a newly created staff account.
-exports.verifyStaffOtp = async (req, res) => {
+// ── PATCH /api/admin/staff/:id/approve ────────────────────────────
+// Admin approves a PENDING registration request.
+exports.approveStaff = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid staff ID" });
     }
     const restaurantId = req.user.restaurantId;
-    const { otp }      = req.body;
 
-    if (!otp) {
-      return res.status(400).json({ success: false, message: "OTP is required" });
-    }
-
-    const staff = await Staff.findOne({ _id: req.params.id, restaurantId })
-      .select("+emailOtp +emailOtpExpiry +emailOtpAttempts +isEmailVerified");
+    const staff = await Staff.findOne({
+      _id: req.params.id,
+      restaurantId,
+      role: { $in: MANAGEABLE_ROLES },
+    });
 
     if (!staff) {
       return res.status(404).json({ success: false, message: "Staff not found" });
     }
-    if (staff.isEmailVerified) {
-      return res.status(400).json({ success: false, message: "Email already verified" });
-    }
-    if (staff.emailOtpAttempts >= MAX_OTP_ATTEMPTS) {
-      return res.status(429).json({ success: false, message: "Too many incorrect attempts. Resend OTP." });
-    }
-    if (!staff.emailOtpExpiry || new Date() > staff.emailOtpExpiry) {
-      return res.status(400).json({ success: false, message: "OTP has expired. Please resend." });
-    }
-    if (staff.emailOtp !== String(otp).trim()) {
-      staff.emailOtpAttempts += 1;
-      await staff.save();
-      const remaining = MAX_OTP_ATTEMPTS - staff.emailOtpAttempts;
-      return res.status(400).json({
+
+    if (staff.status !== "PENDING") {
+      return res.status(409).json({
         success: false,
-        message: `Invalid OTP. ${remaining > 0 ? `${remaining} attempt(s) remaining.` : "No attempts left — resend OTP."}`,
+        message: `Cannot approve — staff status is already "${staff.status}".`,
       });
     }
 
-    // Verify + activate
-    staff.isEmailVerified  = true;
-    staff.isActive         = true;
-    staff.emailOtp         = null;
-    staff.emailOtpExpiry   = null;
-    staff.emailOtpAttempts = 0;
-    await staff.save();
+    // Atomic update to prevent double-approval race condition
+    const updated = await Staff.findOneAndUpdate(
+      { _id: staff._id, status: "PENDING" },
+      {
+        $set: {
+          status:          "ACTIVE",
+          isActive:        true,
+          isEmailVerified: true,
+          reviewedBy:      req.user._id,
+          reviewedAt:      new Date(),
+        },
+      },
+      { new: true }
+    ).select("-password");
+
+    if (!updated) {
+      return res.status(409).json({
+        success: false,
+        message: "Staff request has already been reviewed.",
+      });
+    }
 
     logActivity({
       staff: { _id: req.user._id, restaurantId, name: req.user.name, role: "ADMIN" },
-      action:     "STAFF_VERIFIED",
+      action:     "STAFF_APPROVED",
       entityType: "Staff",
       entityId:   staff._id,
-      newValue:   `${staff.name} email verified`,
+      oldValue:   "PENDING",
+      newValue:   `ACTIVE — ${staff.name} (${staff.role})`,
       req,
     });
 
-    const safe = await Staff.findById(staff._id)
-      .select("-emailOtp -emailOtpExpiry -emailOtpAttempts -password");
-
     return res.status(200).json({
       success: true,
-      message: "Email verified. Staff account is now active.",
-      data:    safe,
+      message: `${staff.name} has been approved and can now log in.`,
+      data:    updated,
     });
   } catch (err) {
-    console.error("AdminStaff verifyStaffOtp:", err);
+    console.error("AdminStaff approveStaff:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
-// ── POST /api/admin/staff/:id/resend-otp ─────────────────────────
-exports.resendStaffOtp = async (req, res) => {
+// ── PATCH /api/admin/staff/:id/reject ─────────────────────────────
+// Admin rejects a PENDING registration request.
+exports.rejectStaff = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid staff ID" });
     }
     const restaurantId = req.user.restaurantId;
+    const { reason } = req.body;
 
-    const staff = await Staff.findOne({ _id: req.params.id, restaurantId })
-      .select("+emailOtp +emailOtpExpiry +emailOtpAttempts +isEmailVerified");
+    const staff = await Staff.findOne({
+      _id: req.params.id,
+      restaurantId,
+      role: { $in: MANAGEABLE_ROLES },
+    });
 
-    if (!staff) return res.status(404).json({ success: false, message: "Staff not found" });
-    if (staff.isEmailVerified) {
-      return res.status(400).json({ success: false, message: "Email already verified" });
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Staff not found" });
     }
 
-    const otp    = generateOtp();
-    const expiry = new Date(Date.now() + getOtpExpiryMs());
-    staff.emailOtp         = otp;
-    staff.emailOtpExpiry   = expiry;
-    staff.emailOtpAttempts = 0;
-    await staff.save();
-
-    try {
-      await sendOtpEmail({ to: staff.email, name: staff.name, otp });
-      return res.status(200).json({
-        success:   true,
-        emailSent: true,
-        message:   "A new OTP has been sent to the staff member's email.",
-      });
-    } catch (emailErr) {
-      console.error("[resendStaffOtp] OTP email failed:", {
-        staffId: staff._id, message: emailErr.message, code: emailErr.code,
-      });
-      return res.status(200).json({
-        success:   true,
-        emailSent: false,
-        message:   "A new OTP was generated, but the email could not be sent. Please check the email configuration.",
+    if (staff.status !== "PENDING") {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot reject — staff status is already "${staff.status}".`,
       });
     }
+
+    // Atomic update to prevent double-rejection race condition
+    const updated = await Staff.findOneAndUpdate(
+      { _id: staff._id, status: "PENDING" },
+      {
+        $set: {
+          status:          "REJECTED",
+          isActive:        false,
+          reviewedBy:      req.user._id,
+          reviewedAt:      new Date(),
+          rejectionReason: reason ? String(reason).trim().slice(0, 500) : null,
+        },
+      },
+      { new: true }
+    ).select("-password");
+
+    if (!updated) {
+      return res.status(409).json({
+        success: false,
+        message: "Staff request has already been reviewed.",
+      });
+    }
+
+    logActivity({
+      staff: { _id: req.user._id, restaurantId, name: req.user.name, role: "ADMIN" },
+      action:     "STAFF_REJECTED",
+      entityType: "Staff",
+      entityId:   staff._id,
+      oldValue:   "PENDING",
+      newValue:   `REJECTED — ${staff.name} (${staff.role})${reason ? `: ${reason}` : ""}`,
+      req,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `${staff.name}'s registration request has been rejected.`,
+      data:    updated,
+    });
   } catch (err) {
-    console.error("AdminStaff resendStaffOtp:", err);
+    console.error("AdminStaff rejectStaff:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
@@ -361,7 +397,7 @@ exports.updateStaff = async (req, res) => {
     if (!staff) return res.status(404).json({ success: false, message: "Staff not found" });
 
     const { name, mobile, role } = req.body;
-    const update = { updatedBy: null };  // updated by Admin, different model
+    const update = { updatedBy: null };
 
     if (name   !== undefined && name.trim())   update.name   = name.trim();
     if (mobile !== undefined && mobile.trim()) {
@@ -378,7 +414,7 @@ exports.updateStaff = async (req, res) => {
     }
 
     const updated = await Staff.findByIdAndUpdate(req.params.id, update, { returnDocument: 'after', runValidators: true })
-      .select("-emailOtp -emailOtpExpiry -emailOtpAttempts -password");
+      .select("-password");
 
     logActivity({
       staff: { _id: req.user._id, restaurantId, name: req.user.name, role: "ADMIN" },
@@ -408,10 +444,11 @@ exports.blockStaff = async (req, res) => {
       _id: req.params.id, restaurantId, role: { $in: MANAGEABLE_ROLES },
     });
     if (!staff) return res.status(404).json({ success: false, message: "Staff not found" });
-    if (!staff.isActive) {
+    if (staff.status === "BLOCKED" || !staff.isActive) {
       return res.status(400).json({ success: false, message: "Staff is already blocked" });
     }
 
+    staff.status   = "BLOCKED";
     staff.isActive = false;
     await staff.save();
 
@@ -425,7 +462,7 @@ exports.blockStaff = async (req, res) => {
       req,
     });
 
-    const safe = await Staff.findById(staff._id).select("-emailOtp -emailOtpExpiry -emailOtpAttempts -password");
+    const safe = await Staff.findById(staff._id).select("-password");
     return res.status(200).json({ success: true, message: `${staff.name} has been blocked`, data: safe });
   } catch (err) {
     console.error("AdminStaff blockStaff:", err);
@@ -444,10 +481,11 @@ exports.unblockStaff = async (req, res) => {
       _id: req.params.id, restaurantId, role: { $in: MANAGEABLE_ROLES },
     });
     if (!staff) return res.status(404).json({ success: false, message: "Staff not found" });
-    if (staff.isActive) {
+    if (staff.status === "ACTIVE" && staff.isActive) {
       return res.status(400).json({ success: false, message: "Staff is already active" });
     }
 
+    staff.status   = "ACTIVE";
     staff.isActive = true;
     await staff.save();
 
@@ -461,7 +499,7 @@ exports.unblockStaff = async (req, res) => {
       req,
     });
 
-    const safe = await Staff.findById(staff._id).select("-emailOtp -emailOtpExpiry -emailOtpAttempts -password");
+    const safe = await Staff.findById(staff._id).select("-password");
     return res.status(200).json({ success: true, message: `${staff.name} has been unblocked`, data: safe });
   } catch (err) {
     console.error("AdminStaff unblockStaff:", err);

@@ -12,14 +12,27 @@ const ctrl    = require("../controllers/adminStaff.controller");
 // All routes require admin auth
 router.use(protect);
 
+// Staff listing
 router.get("/",                      ctrl.getStaff);
+router.get("/pending",               ctrl.getPendingRequests);
+router.get("/rejected",              ctrl.getRejectedRequests);
 router.get("/:id",                   ctrl.getStaffById);
+
+// Staff creation (admin creates directly → ACTIVE)
 router.post("/",                     ctrl.createStaff);
+
+// Staff updates
 router.patch("/:id",                 ctrl.updateStaff);
+
+// Approval workflow
+router.patch("/:id/approve",         ctrl.approveStaff);
+router.patch("/:id/reject",          ctrl.rejectStaff);
+
+// Block/unblock
 router.patch("/:id/block",           ctrl.blockStaff);
 router.patch("/:id/unblock",         ctrl.unblockStaff);
-router.post("/:id/verify-otp",       ctrl.verifyStaffOtp);
-router.post("/:id/resend-otp",       ctrl.resendStaffOtp);
+
+// Activity
 router.get("/:id/activity",          ctrl.getStaffActivity);
 
 module.exports = router;

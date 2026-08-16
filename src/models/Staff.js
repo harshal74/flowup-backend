@@ -42,14 +42,16 @@ const staffSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Lifecycle status: PENDING → ACTIVE | REJECTED; ACTIVE ↔ BLOCKED
     status: {
       type: String,
-      default: "active",
+      enum: ["PENDING", "ACTIVE", "REJECTED", "BLOCKED"],
+      default: "PENDING",
     },
 
     isActive: {
       type: Boolean,
-      default: true,
+      default: false,
     },
 
     createdBy: {
@@ -74,34 +76,36 @@ const staffSchema = new mongoose.Schema(
       default: "",
     },
 
-    // Email OTP verification
+    // Admin approval fields
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Staff",
+      default: null,
+    },
+
+    reviewedAt: {
+      type: Date,
+      default: null,
+    },
+
+    rejectionReason: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: 500,
+    },
+
+    // Legacy field — kept for backward compatibility with existing accounts
     isEmailVerified: {
       type: Boolean,
       default: false,
-    },
-
-    emailOtp: {
-      type: String,
-      default: null,
-      select: false,
-    },
-
-    emailOtpExpiry: {
-      type: Date,
-      default: null,
-      select: false,
-    },
-
-    emailOtpAttempts: {
-      type: Number,
-      default: 0,
-      select: false,
     },
   },
   { timestamps: true }
 );
 
 staffSchema.index({ restaurantId: 1, email: 1 });
+staffSchema.index({ restaurantId: 1, status: 1 });
 
 module.exports =
   mongoose.models.Staff || mongoose.model("Staff", staffSchema);

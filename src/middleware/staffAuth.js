@@ -26,7 +26,7 @@ async function tryStaffAuth(req) {
     const staff = await Staff.findById(staffId);
     if (!staff) return null;
 
-    return staff; // caller handles isEmailVerified / isActive checks
+    return staff; // caller handles status checks
   } catch {
     return null;
   }
@@ -43,18 +43,28 @@ const staffAuth = async (req, res, next) => {
     return res.status(401).json({ success: false, message: "Unauthorized access" });
   }
 
-  if (staff.isEmailVerified === false) {
+  // Only ACTIVE staff can access protected routes
+  if (staff.status === "PENDING") {
     return res.status(403).json({
       success: false,
-      message: "Email not verified.",
-      requiresOtp: true,
+      message: "Your registration request is awaiting administrator approval.",
+      status: "PENDING",
     });
   }
 
-  if (!staff.isActive) {
+  if (staff.status === "REJECTED") {
     return res.status(403).json({
       success: false,
-      message: "Account is disabled.",
+      message: "Your registration request was rejected.",
+      status: "REJECTED",
+    });
+  }
+
+  if (staff.status === "BLOCKED" || !staff.isActive) {
+    return res.status(403).json({
+      success: false,
+      message: "Your account has been blocked by the administrator.",
+      status: "BLOCKED",
     });
   }
 
@@ -71,7 +81,7 @@ const staffAuth = async (req, res, next) => {
 const tryStaffAuthMiddleware = async (req, res, next) => {
   const staff = await tryStaffAuth(req);
 
-  if (staff && staff.isEmailVerified !== false && staff.isActive) {
+  if (staff && staff.status === "ACTIVE" && staff.isActive) {
     req.staff = staff;
   }
   // Always call next() — let adminOrStaff check req.staff
