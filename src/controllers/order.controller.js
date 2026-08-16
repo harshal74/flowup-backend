@@ -103,6 +103,12 @@ const createOrder = async (req, res) => {
       subtotalAmount += subtotal;
     }
 
+    // Calculate delivery charge from settings
+    let deliveryChargeAmount = 0;
+    if (orderType === "DELIVERY" && settings && settings.deliveryCharge > 0) {
+      deliveryChargeAmount = settings.deliveryCharge;
+    }
+
     const order = await Order.create({
       restaurantId,
       orderNumber: `ORD-${Date.now()}-${Math.floor(Math.random() * 9000) + 1000}`,
@@ -112,7 +118,8 @@ const createOrder = async (req, res) => {
       items: orderItems,
       totalItems,
       subtotalAmount,
-      totalAmount: subtotalAmount,
+      deliveryCharge: deliveryChargeAmount,
+      totalAmount: subtotalAmount + deliveryChargeAmount,
       note: note || "",
       address: orderType === "DELIVERY" ? (address || customer.address || "") : "",
       ...(orderType === "DELIVERY" && deliveryLocation?.latitude && deliveryLocation?.longitude
@@ -122,7 +129,7 @@ const createOrder = async (req, res) => {
 
     // Update customer stats
     existingCustomer.totalOrders += 1;
-    existingCustomer.totalSpent += subtotalAmount;
+    existingCustomer.totalSpent += subtotalAmount + deliveryChargeAmount;
     existingCustomer.lastOrderAt = new Date();
     await existingCustomer.save();
 
@@ -201,6 +208,13 @@ const acceptOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
+    if (order.status !== "PENDING") {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot accept — order is already in '${order.status}' status.`,
+      });
+    }
+
     order.status = "ACCEPTED";
     order.acceptedAt = new Date();
     await order.save();
@@ -229,6 +243,13 @@ const rejectOrder = async (req, res) => {
 
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (order.status !== "PENDING") {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot reject — order is already in '${order.status}' status.`,
+      });
     }
 
     order.status = "REJECTED";

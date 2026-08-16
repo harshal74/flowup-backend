@@ -44,7 +44,10 @@ const staffAuth = async (req, res, next) => {
   }
 
   // Only ACTIVE staff can access protected routes
-  if (staff.status === "PENDING") {
+  // Legacy accounts without status field: treat as ACTIVE if isActive is true
+  const effectiveStatus = staff.status || (staff.isActive !== false ? "ACTIVE" : "BLOCKED");
+
+  if (effectiveStatus === "PENDING") {
     return res.status(403).json({
       success: false,
       message: "Your registration request is awaiting administrator approval.",
@@ -52,7 +55,7 @@ const staffAuth = async (req, res, next) => {
     });
   }
 
-  if (staff.status === "REJECTED") {
+  if (effectiveStatus === "REJECTED") {
     return res.status(403).json({
       success: false,
       message: "Your registration request was rejected.",
@@ -60,7 +63,7 @@ const staffAuth = async (req, res, next) => {
     });
   }
 
-  if (staff.status === "BLOCKED" || !staff.isActive) {
+  if (effectiveStatus === "BLOCKED" || !staff.isActive) {
     return res.status(403).json({
       success: false,
       message: "Your account has been blocked by the administrator.",
@@ -81,8 +84,11 @@ const staffAuth = async (req, res, next) => {
 const tryStaffAuthMiddleware = async (req, res, next) => {
   const staff = await tryStaffAuth(req);
 
-  if (staff && staff.status === "ACTIVE" && staff.isActive) {
-    req.staff = staff;
+  if (staff) {
+    const effectiveStatus = staff.status || (staff.isActive !== false ? "ACTIVE" : "BLOCKED");
+    if (effectiveStatus === "ACTIVE" && staff.isActive !== false) {
+      req.staff = staff;
+    }
   }
   // Always call next() — let adminOrStaff check req.staff
   next();

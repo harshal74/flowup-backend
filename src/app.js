@@ -68,4 +68,19 @@ app.use("/api/billing", billingRoutes);
 app.use("/api/staff",   staffRoutes);
 app.use("/api/admin/staff", adminStaffRoutes);
 
+// ── 404 handler for unknown API routes ────────────────────────────
+app.use("/api/*", (req, res) => {
+  res.status(404).json({ success: false, message: `Route not found: ${req.method} ${req.originalUrl}` });
+});
+
+// ── Global error handler ──────────────────────────────────────────
+app.use((err, req, res, _next) => {
+  // CORS errors from the origin callback
+  if (err.message && err.message.startsWith("CORS:")) {
+    return res.status(403).json({ success: false, message: err.message });
+  }
+  console.error("[Global Error]", err.message || err);
+  res.status(500).json({ success: false, message: "Internal server error" });
+});
+
 module.exports = { app, ALLOWED_ORIGINS };

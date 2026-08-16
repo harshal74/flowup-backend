@@ -26,27 +26,50 @@ exports.getStaff = async (req, res) => {
     const restaurantId = req.user.restaurantId;
     const { search, role, status, page = 1, limit = 50 } = req.query;
 
-    const filter = {
-      restaurantId,
-      role: { $in: MANAGEABLE_ROLES },
-      status: { $in: ["ACTIVE", "BLOCKED"] }, // Only show approved staff in main list
-    };
+    // Use $and to combine conditions safely — avoids $or collisions
+    const conditions = [
+      { restaurantId },
+      { role: { $in: MANAGEABLE_ROLES } },
+    ];
 
-    if (role && MANAGEABLE_ROLES.includes(role)) {
-      filter.role = role;
+    // Status filter — default shows active/blocked + legacy accounts
+    if (status === "active") {
+      conditions.push({
+        $or: [
+          { status: "ACTIVE" },
+          { status: { $exists: false }, isActive: { $ne: false } },
+          { status: null, isActive: { $ne: false } },
+        ],
+      });
+    } else if (status === "blocked") {
+      conditions.push({ status: "BLOCKED" });
+    } else {
+      // Default: show active + blocked + legacy (exclude PENDING & REJECTED)
+      conditions.push({
+        $or: [
+          { status: { $in: ["ACTIVE", "BLOCKED"] } },
+          { status: { $exists: false } },
+          { status: null },
+        ],
+      });
     }
 
-    if (status === "active")  { filter.status = "ACTIVE"; filter.isActive = true; }
-    if (status === "blocked") { filter.status = "BLOCKED"; filter.isActive = false; }
+    if (role && MANAGEABLE_ROLES.includes(role)) {
+      conditions.push({ role });
+    }
 
     if (search && search.trim()) {
       const q = search.trim();
-      filter.$or = [
-        { name:   { $regex: q, $options: "i" } },
-        { email:  { $regex: q, $options: "i" } },
-        { mobile: { $regex: q, $options: "i" } },
-      ];
+      conditions.push({
+        $or: [
+          { name:   { $regex: q, $options: "i" } },
+          { email:  { $regex: q, $options: "i" } },
+          { mobile: { $regex: q, $options: "i" } },
+        ],
+      });
     }
+
+    const filter = { $and: conditions };
 
     const skip  = (Number(page) - 1) * Number(limit);
     const total = await Staff.countDocuments(filter);
@@ -58,10 +81,11 @@ exports.getStaff = async (req, res) => {
       .skip(skip)
       .limit(Number(limit));
 
-    // Summary counts (unfiltered — active/blocked only)
+    // Summary counts (includes legacy accounts without status field)
+    const legacyActiveFilter = { restaurantId, role: { $in: MANAGEABLE_ROLES }, $or: [{ status: "ACTIVE" }, { status: { $exists: false } }, { status: null }], isActive: { $ne: false } };
     const [totalCount, activeCount, blockedCount, pendingCount] = await Promise.all([
-      Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, status: { $in: ["ACTIVE", "BLOCKED"] } }),
-      Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, status: "ACTIVE" }),
+      Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, $or: [{ status: { $in: ["ACTIVE", "BLOCKED"] } }, { status: { $exists: false } }, { status: null }] }),
+      Staff.countDocuments(legacyActiveFilter),
       Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, status: "BLOCKED" }),
       Staff.countDocuments({ restaurantId, role: { $in: MANAGEABLE_ROLES }, status: "PENDING" }),
     ]);

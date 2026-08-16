@@ -142,7 +142,11 @@ exports.login = async (req, res) => {
     }
 
     // ── Check status before password verification ─────────────
-    if (staff.status === "PENDING") {
+    // Legacy accounts created before the approval system may not have a status field.
+    // Treat undefined/null status as ACTIVE if isActive is true.
+    const effectiveStatus = staff.status || (staff.isActive !== false ? "ACTIVE" : "BLOCKED");
+
+    if (effectiveStatus === "PENDING") {
       return res.status(403).json({
         success: false,
         message: "Your registration request is awaiting administrator approval.",
@@ -150,7 +154,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    if (staff.status === "REJECTED") {
+    if (effectiveStatus === "REJECTED") {
       return res.status(403).json({
         success: false,
         message: "Your registration request was rejected.",
@@ -158,7 +162,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    if (staff.status === "BLOCKED" || !staff.isActive) {
+    if (effectiveStatus === "BLOCKED" || !staff.isActive) {
       return res.status(403).json({
         success: false,
         message: "Your account has been blocked by the administrator.",
