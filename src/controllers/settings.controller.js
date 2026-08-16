@@ -90,7 +90,7 @@ const updateSettings = async (req, res) => {
     const settings = await Setting.findOneAndUpdate(
       { restaurantId },
       { ...req.body, restaurantId },
-      { upsert: true, new: true, runValidators: true }
+      { upsert: true, returnDocument: 'after', runValidators: true }
     );
 
     return res.status(200).json({
@@ -115,7 +115,7 @@ const openShop = async (req, res) => {
     const settings = await Setting.findOneAndUpdate(
       { restaurantId },
       { shopOpen: true },
-      { new: true }  // BUG 11 FIX
+      { returnDocument: 'after' }
     );
 
     return res.status(200).json({
@@ -141,7 +141,7 @@ const closeShop = async (req, res) => {
     const settings = await Setting.findOneAndUpdate(
       { restaurantId },
       { shopOpen: false },
-      { new: true }  // BUG 11 FIX
+      { returnDocument: 'after' }
     );
 
     return res.status(200).json({

@@ -362,7 +362,7 @@ exports.updateProfile = async (req, res) => {
     if (profileImage !== undefined)  update.profileImage = profileImage;
 
     const updated = await Staff.findByIdAndUpdate(
-      req.staff._id, update, { new: true, runValidators: true }
+      req.staff._id, update, { returnDocument: 'after', runValidators: true }
     );
 
     if (!updated) {

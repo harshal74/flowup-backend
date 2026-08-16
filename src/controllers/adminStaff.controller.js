@@ -377,7 +377,7 @@ exports.updateStaff = async (req, res) => {
       update.role = role;
     }
 
-    const updated = await Staff.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true })
+    const updated = await Staff.findByIdAndUpdate(req.params.id, update, { returnDocument: 'after', runValidators: true })
       .select("-emailOtp -emailOtpExpiry -emailOtpAttempts -password");
 
     logActivity({

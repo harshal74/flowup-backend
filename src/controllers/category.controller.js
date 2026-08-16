@@ -122,7 +122,7 @@ const updateCategory = async (req, res) => {
     const updatedCategory = await Category.findByIdAndUpdate(
       id,
       allowedUpdate,
-      { new: true, runValidators: true }   // BUG 11 FIX: new: true
+      { returnDocument: 'after', runValidators: true }
     );
 
     return res.status(200).json({ success: true, message: "Category updated successfully", data: updatedCategory });

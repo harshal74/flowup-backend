@@ -176,7 +176,7 @@ const updateMenu = async (req, res) => {
     const updatedMenu = await Menu.findByIdAndUpdate(
       req.params.id,
       allowed,
-      { new: true, runValidators: true }  // BUG 11 FIX: new: true
+      { returnDocument: 'after', runValidators: true }  // Mongoose 9: replaces deprecated { new: true }
     );
 
     return res.status(200).json({ success: true, message: "Menu updated successfully", data: updatedMenu });
