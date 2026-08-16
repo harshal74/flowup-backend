@@ -218,6 +218,16 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Client-generated idempotency key for duplicate prevention.
+    // Compound unique index with restaurantId prevents duplicate orders
+    // from double-clicks, network retries, or browser replays.
+    idempotencyKey: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: 128,
+    },
+
     preparedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Staff",
@@ -249,5 +259,21 @@ orderSchema.index({
 orderSchema.index({
   customerId: 1,
 });
+
+// Billing query: completed + unpaid + no bill
+orderSchema.index({
+  restaurantId: 1,
+  status: 1,
+  paymentStatus: 1,
+  billId: 1,
+});
+
+// Idempotency: unique compound index ensures no duplicate orders per key.
+// partialFilterExpression excludes documents where idempotencyKey is null,
+// so orders without a key (legacy/admin-created) are not affected.
+orderSchema.index(
+  { restaurantId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string" } } }
+);
 
 module.exports = mongoose.models.Order || mongoose.model("Order", orderSchema);

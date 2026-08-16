@@ -28,6 +28,46 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: "Customer details are required" });
     }
 
+    if (!customer.mobile || !customer.name) {
+      return res.status(400).json({ success: false, message: "Customer name and mobile are required" });
+    }
+
+    // ── Idempotency protection ─────────────────────────────────
+    // Frontend sends a unique `idempotencyKey` per intentional order submission.
+    // Same key on retry (double-click, network retry) → return existing order.
+    // Different key (new intentional order) → create new order normally.
+    // No key → no deduplication (backwards-compatible).
+    let idempotencyKey = null;
+    if (req.body.idempotencyKey !== undefined && req.body.idempotencyKey !== null && req.body.idempotencyKey !== "") {
+      if (typeof req.body.idempotencyKey !== "string") {
+        return res.status(400).json({ success: false, message: "idempotencyKey must be a string" });
+      }
+      const trimmed = req.body.idempotencyKey.trim();
+      if (trimmed.length === 0) {
+        // Treat empty/whitespace-only as no key
+        idempotencyKey = null;
+      } else if (trimmed.length > 128) {
+        return res.status(400).json({ success: false, message: "idempotencyKey must be 128 characters or fewer" });
+      } else {
+        idempotencyKey = trimmed;
+      }
+    }
+
+    if (idempotencyKey) {
+      const existingOrder = await Order.findOne({
+        restaurantId,
+        idempotencyKey,
+      }).populate("customerId", "name mobile address");
+
+      if (existingOrder) {
+        return res.status(200).json({
+          success: true,
+          message: "Order already placed",
+          data: existingOrder,
+        });
+      }
+    }
+
     if (!orderType || !["DINE_IN", "DELIVERY"].includes(orderType)) {
       return res.status(400).json({ success: false, message: "Invalid order type" });
     }
@@ -65,7 +105,7 @@ const createOrder = async (req, res) => {
     let subtotalAmount = 0;
 
     for (const item of items) {
-      const menuItem = await Menu.findById(item.menuId);
+      const menuItem = await Menu.findOne({ _id: item.menuId, restaurantId });
 
       if (!menuItem) {
         return res.status(404).json({ success: false, message: "Menu item not found" });
@@ -77,7 +117,7 @@ const createOrder = async (req, res) => {
 
       // Check that the menu item's category is active
       if (menuItem.categoryId) {
-        const category = await Category.findById(menuItem.categoryId).select("isActive name");
+        const category = await Category.findOne({ _id: menuItem.categoryId, restaurantId }).select("isActive name");
         if (category && !category.isActive) {
           return res.status(400).json({
             success: false,
@@ -125,6 +165,7 @@ const createOrder = async (req, res) => {
       ...(orderType === "DELIVERY" && deliveryLocation?.latitude && deliveryLocation?.longitude
         ? { deliveryLocation }
         : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
     });
 
     // Update customer stats
@@ -149,25 +190,56 @@ const createOrder = async (req, res) => {
       data: populatedOrder,
     });
   } catch (error) {
-    console.error("Create Order Error:", error);
+    // Handle MongoDB E11000 duplicate key on idempotencyKey — race condition
+    // Two concurrent requests with the same key both passed the findOne check.
+    // The unique index blocked the second insert. Return the first order.
+    if (error.code === 11000 && error.keyPattern?.idempotencyKey) {
+      const key = (typeof req.body.idempotencyKey === "string") ? req.body.idempotencyKey.trim() : null;
+      if (key) {
+        const existing = await Order.findOne({
+          restaurantId: DEFAULT_RESTAURANT_ID,
+          idempotencyKey: key,
+        }).populate("customerId", "name mobile address");
+        if (existing) {
+          return res.status(200).json({
+            success: true,
+            message: "Order already placed",
+            data: existing,
+          });
+        }
+      }
+    }
+    console.error("Create Order Error:", error.message || error);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
 // ─────────────────────────────────────────────────────────────────
-// Get All Orders
+// Get All Orders (paginated, with optional status filter)
 // ─────────────────────────────────────────────────────────────────
 const getOrders = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
+    const { status, page = 1, limit = 100 } = req.query;
 
-    const orders = await Order.find({ restaurantId })
+    const filter = { restaurantId };
+    if (status) filter.status = status;
+
+    const skip  = (Number(page) - 1) * Number(limit);
+    const total = await Order.countDocuments(filter);
+
+    const orders = await Order.find(filter)
       .populate("customerId", "name mobile address")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit));
 
     return res.status(200).json({
       success: true,
       count: orders.length,
+      total,
+      page: Number(page),
+      limit: Number(limit),
       data: orders,
     });
   } catch (error) {

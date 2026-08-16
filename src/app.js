@@ -15,6 +15,11 @@ const adminStaffRoutes = require("./routes/adminStaff.route");
 
 const app = express();
 
+// Trust the first proxy hop (Render/Railway reverse proxy).
+// This makes req.ip return the real client IP from X-Forwarded-For
+// instead of the proxy's internal IP.
+app.set("trust proxy", 1);
+
 // Allowed origins — covers dev ports + production Netlify/Railway domains.
 // Set ADMIN_ORIGIN and CUSTOMER_ORIGIN on Railway for production.
 const ALLOWED_ORIGINS = [
@@ -48,7 +53,7 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 
 // Health Check
 app.get("/", (req, res) => {
@@ -69,7 +74,7 @@ app.use("/api/staff",   staffRoutes);
 app.use("/api/admin/staff", adminStaffRoutes);
 
 // ── 404 handler for unknown API routes ────────────────────────────
-app.use("/api/*", (req, res) => {
+app.use("/api/{*path}", (req, res) => {
   res.status(404).json({ success: false, message: `Route not found: ${req.method} ${req.originalUrl}` });
 });
 

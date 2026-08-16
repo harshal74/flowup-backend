@@ -1,18 +1,18 @@
 const Category = require("../models/Category");
+const mongoose = require("mongoose");
 
-// Create Category — BUG J FIX: use req.user.restaurantId not req.body
-// displayOrder is auto-assigned as max+1
+function isValidId(id) {
+  return mongoose.Types.ObjectId.isValid(id);
+}
+
+// Create Category
 const createCategory = async (req, res) => {
   try {
-    // Use authenticated admin's restaurantId — never trust req.body.restaurantId
-    const restaurantId = req.user?.restaurantId || req.body.restaurantId;
+    const restaurantId = req.user.restaurantId;
     const { name, description, image } = req.body;
 
-    if (!restaurantId || !name) {
-      return res.status(400).json({
-        success: false,
-        message: "Category name is required",
-      });
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, message: "Category name is required" });
     }
 
     const existingCategory = await Category.findOne({ restaurantId, name: name.trim() });
@@ -40,77 +40,57 @@ const createCategory = async (req, res) => {
   }
 };
 
-// Get All Categories
+// Get All Categories (public for customer frontend via query param, admin via req.user)
 const getCategories = async (req, res) => {
   try {
-    const { restaurantId } = req.query;
+    const restaurantId = req.user?.restaurantId || req.query.restaurantId;
 
-    const filter = {};
-
-    if (restaurantId) {
-      filter.restaurantId = restaurantId;
+    if (!restaurantId) {
+      return res.status(400).json({ success: false, message: "restaurantId is required" });
     }
 
-    const categories = await Category.find(filter)
-      .sort({
-        displayOrder: 1,
-        createdAt: -1,
-      });
+    const categories = await Category.find({ restaurantId })
+      .sort({ displayOrder: 1, createdAt: -1 });
 
-    return res.status(200).json({
-      success: true,
-      count: categories.length,
-      data: categories,
-    });
+    return res.status(200).json({ success: true, count: categories.length, data: categories });
   } catch (error) {
     console.error("Get Categories Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
-// Get Category By ID
+// Get Category By ID — scoped by restaurant
 const getCategoryById = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isValidId(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
 
-    const category = await Category.findById(id);
+    const restaurantId = req.user.restaurantId;
+    const category = await Category.findOne({ _id: id, restaurantId });
 
-    if (!category) {
-      return res.status(404).json({
-        success: false,
-        message: "Category not found",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: category,
-    });
-  } catch (error) {
-    console.error("Get Category Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
-  }
-};
-
-// Update Category — BUG 8 FIX: whitelist fields + BUG 11 FIX: new: true
-const updateCategory = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const category = await Category.findById(id);
     if (!category) {
       return res.status(404).json({ success: false, message: "Category not found" });
     }
 
-    // Only allow these fields — never let caller change restaurantId
+    return res.status(200).json({ success: true, data: category });
+  } catch (error) {
+    console.error("Get Category Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Update Category — scoped by restaurant, whitelisted fields
+const updateCategory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!isValidId(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
+
+    const restaurantId = req.user.restaurantId;
+    const category = await Category.findOne({ _id: id, restaurantId });
+    if (!category) {
+      return res.status(404).json({ success: false, message: "Category not found" });
+    }
+
     const { name, description, image, displayOrder, isActive } = req.body;
     const allowedUpdate = {};
     if (name         !== undefined) allowedUpdate.name         = name;
@@ -119,8 +99,8 @@ const updateCategory = async (req, res) => {
     if (displayOrder !== undefined) allowedUpdate.displayOrder = displayOrder;
     if (isActive     !== undefined) allowedUpdate.isActive     = isActive;
 
-    const updatedCategory = await Category.findByIdAndUpdate(
-      id,
+    const updatedCategory = await Category.findOneAndUpdate(
+      { _id: id, restaurantId },
       allowedUpdate,
       { returnDocument: 'after', runValidators: true }
     );
@@ -132,94 +112,71 @@ const updateCategory = async (req, res) => {
   }
 };
 
-// Delete Category
+// Delete Category — scoped by restaurant
 const deleteCategory = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isValidId(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
 
-    const category = await Category.findById(id);
+    const restaurantId = req.user.restaurantId;
+    const deleted = await Category.findOneAndDelete({ _id: id, restaurantId });
 
-    if (!category) {
-      return res.status(404).json({
-        success: false,
-        message: "Category not found",
-      });
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: "Category not found" });
     }
 
-    await Category.findByIdAndDelete(id);
-
-    return res.status(200).json({
-      success: true,
-      message: "Category deleted successfully",
-    });
+    return res.status(200).json({ success: true, message: "Category deleted successfully" });
   } catch (error) {
     console.error("Delete Category Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
-// Toggle Category Status
+// Toggle Category Status — scoped by restaurant
 const toggleCategoryStatus = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isValidId(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
 
-    const category = await Category.findById(id);
+    const restaurantId = req.user.restaurantId;
+    const category = await Category.findOne({ _id: id, restaurantId });
 
     if (!category) {
-      return res.status(404).json({
-        success: false,
-        message: "Category not found",
-      });
+      return res.status(404).json({ success: false, message: "Category not found" });
     }
 
     category.isActive = !category.isActive;
-
     await category.save();
 
     return res.status(200).json({
       success: true,
-      message: `Category ${
-        category.isActive ? "activated" : "deactivated"
-      } successfully`,
+      message: `Category ${category.isActive ? "activated" : "deactivated"} successfully`,
       data: category,
     });
   } catch (error) {
     console.error("Toggle Category Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
-// Bulk reorder — accepts [{ id, displayOrder }, ...] and updates all in one call
+// Bulk reorder — scoped by restaurant
 const reorderCategories = async (req, res) => {
   try {
-    const { orders } = req.body; // Array<{ id: string; displayOrder: number }>
+    const restaurantId = req.user.restaurantId;
+    const { orders } = req.body;
 
     if (!Array.isArray(orders) || orders.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "orders must be a non-empty array of { id, displayOrder }",
-      });
+      return res.status(400).json({ success: false, message: "orders must be a non-empty array of { id, displayOrder }" });
     }
 
-    // Run all updates in parallel
+    // Only update categories belonging to this restaurant
     await Promise.all(
       orders.map(({ id, displayOrder }) =>
-        Category.findByIdAndUpdate(id, { displayOrder })
+        Category.findOneAndUpdate({ _id: id, restaurantId }, { displayOrder })
       )
     );
 
-    return res.status(200).json({
-      success: true,
-      message: "Category order updated",
-    });
+    return res.status(200).json({ success: true, message: "Category order updated" });
   } catch (error) {
     console.error("Reorder Categories Error:", error);
     return res.status(500).json({ success: false, message: "Internal server error" });

@@ -90,31 +90,24 @@ const getPublicMenus = async (req, res) => {
   }
 };
 
-// Get Menu By Id
+// Get Menu By Id — scoped by restaurant for admin, public lookup by ID for customer
 const getMenuById = async (req, res) => {
   try {
     if (badId(req.params.id, res)) return;
-    const menu = await Menu.findById(req.params.id)
-      .populate("categoryId", "name");
+    const restaurantId = req.user?.restaurantId;
+    const query = restaurantId
+      ? { _id: req.params.id, restaurantId }
+      : { _id: req.params.id };
+    const menu = await Menu.findOne(query).populate("categoryId", "name");
 
     if (!menu) {
-      return res.status(404).json({
-        success: false,
-        message: "Menu item not found",
-      });
+      return res.status(404).json({ success: false, message: "Menu item not found" });
     }
 
-    return res.status(200).json({
-      success: true,
-      data: menu,
-    });
+    return res.status(200).json({ success: true, data: menu });
   } catch (error) {
     console.error("Get Menu Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
@@ -122,11 +115,13 @@ const getMenuById = async (req, res) => {
 const getMenusByCategory = async (req, res) => {
   try {
     const { categoryId } = req.params;
+    // Scope by restaurant — use authenticated user's ID or query param for public access
+    const restaurantId = req.user?.restaurantId || req.query.restaurantId;
 
-    const menus = await Menu.find({
-      categoryId,
-      isAvailable: true,
-    });
+    const filter = { categoryId, isAvailable: true };
+    if (restaurantId) filter.restaurantId = restaurantId;
+
+    const menus = await Menu.find(filter);
 
     return res.status(200).json({
       success: true,
@@ -135,19 +130,16 @@ const getMenusByCategory = async (req, res) => {
     });
   } catch (error) {
     console.error("Category Menu Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
-// Update Menu Item — BUG 9 FIX: whitelist fields; BUG 11 FIX: new: true
+// Update Menu Item — scoped by restaurant, whitelisted fields
 const updateMenu = async (req, res) => {
   try {
     if (badId(req.params.id, res)) return;
-    const menu = await Menu.findById(req.params.id);
+    const restaurantId = req.user.restaurantId;
+    const menu = await Menu.findOne({ _id: req.params.id, restaurantId });
     if (!menu) {
       return res.status(404).json({ success: false, message: "Menu item not found" });
     }
@@ -173,10 +165,10 @@ const updateMenu = async (req, res) => {
     if (tags             !== undefined) allowed.tags             = tags;
     if (categoryId       !== undefined) allowed.categoryId       = categoryId;
 
-    const updatedMenu = await Menu.findByIdAndUpdate(
-      req.params.id,
+    const updatedMenu = await Menu.findOneAndUpdate(
+      { _id: req.params.id, restaurantId },
       allowed,
-      { returnDocument: 'after', runValidators: true }  // Mongoose 9: replaces deprecated { new: true }
+      { returnDocument: 'after', runValidators: true }
     );
 
     return res.status(200).json({ success: true, message: "Menu updated successfully", data: updatedMenu });
@@ -186,105 +178,71 @@ const updateMenu = async (req, res) => {
   }
 };
 
-// Delete Menu Item
+// Delete Menu Item — scoped by restaurant
 const deleteMenu = async (req, res) => {
   try {
     if (badId(req.params.id, res)) return;
-    const menu = await Menu.findById(req.params.id);
+    const restaurantId = req.user.restaurantId;
+    const deleted = await Menu.findOneAndDelete({ _id: req.params.id, restaurantId });
 
-    if (!menu) {
-      return res.status(404).json({
-        success: false,
-        message: "Menu item not found",
-      });
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: "Menu item not found" });
     }
 
-    await Menu.findByIdAndDelete(req.params.id);
-
-    return res.status(200).json({
-      success: true,
-      message: "Menu deleted successfully",
-    });
+    return res.status(200).json({ success: true, message: "Menu deleted successfully" });
   } catch (error) {
     console.error("Delete Menu Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
-// Toggle Availability
+// Toggle Availability — scoped by restaurant
 const toggleAvailability = async (req, res) => {
   try {
     if (badId(req.params.id, res)) return;
-    const menu = await Menu.findById(req.params.id);
+    const restaurantId = req.user.restaurantId;
+    const menu = await Menu.findOne({ _id: req.params.id, restaurantId });
 
     if (!menu) {
-      return res.status(404).json({
-        success: false,
-        message: "Menu item not found",
-      });
+      return res.status(404).json({ success: false, message: "Menu item not found" });
     }
 
     menu.isAvailable = !menu.isAvailable;
-
     await menu.save();
 
     return res.status(200).json({
       success: true,
-      message: `Menu item ${
-        menu.isAvailable
-          ? "available"
-          : "unavailable"
-      } successfully`,
+      message: `Menu item ${menu.isAvailable ? "available" : "unavailable"} successfully`,
       data: menu,
     });
   } catch (error) {
     console.error("Toggle Availability Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
-// Toggle Recommended
+// Toggle Recommended — scoped by restaurant
 const toggleRecommendation = async (req, res) => {
   try {
     if (badId(req.params.id, res)) return;
-    const menu = await Menu.findById(req.params.id);
+    const restaurantId = req.user.restaurantId;
+    const menu = await Menu.findOne({ _id: req.params.id, restaurantId });
 
     if (!menu) {
-      return res.status(404).json({
-        success: false,
-        message: "Menu item not found",
-      });
+      return res.status(404).json({ success: false, message: "Menu item not found" });
     }
 
-    menu.isRecommended =
-      !menu.isRecommended;
-
+    menu.isRecommended = !menu.isRecommended;
     await menu.save();
 
     return res.status(200).json({
       success: true,
-      message: `Menu item ${
-        menu.isRecommended
-          ? "recommended"
-          : "not recommended"
-      }`,
+      message: `Menu item ${menu.isRecommended ? "recommended" : "not recommended"}`,
       data: menu,
     });
   } catch (error) {
     console.error("Toggle Recommendation Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 

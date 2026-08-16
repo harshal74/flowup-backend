@@ -1,4 +1,5 @@
 const { Server } = require("socket.io");
+const jwt = require("jsonwebtoken");
 
 let io = null;
 
@@ -36,6 +37,33 @@ function initSocket(httpServer, allowedOrigins) {
 
     if (!restaurantId) {
       socket.emit("error", { message: "restaurantId is required" });
+      socket.disconnect(true);
+      return;
+    }
+
+    // ── Authentication check ─────────────────────────────────────
+    // Only authenticated admin/staff can join restaurant rooms.
+    // Customer frontend does not use socket connections (order tracking
+    // is done via REST polling or the success page is static).
+    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+
+    if (!token) {
+      socket.emit("error", { message: "Authentication required" });
+      socket.disconnect(true);
+      return;
+    }
+
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const tokenRestaurantId = decoded.restaurantId;
+      // Verify the token's restaurant matches the requested room
+      if (tokenRestaurantId && tokenRestaurantId !== restaurantId) {
+        socket.emit("error", { message: "Restaurant mismatch" });
+        socket.disconnect(true);
+        return;
+      }
+    } catch {
+      socket.emit("error", { message: "Invalid or expired token" });
       socket.disconnect(true);
       return;
     }

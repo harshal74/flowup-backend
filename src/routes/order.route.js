@@ -1,4 +1,5 @@
 const express = require("express");
+const { rateLimit } = require("../middleware/rateLimit");
 
 const {
   createOrder,
@@ -12,6 +13,33 @@ const {
 const protect = require("../middleware/auth.middleware");
 
 const router = express.Router();
+
+// Public order creation rate limiting:
+// Uses IP + customer mobile as composite key so multiple customers on the same
+// restaurant Wi-Fi are limited independently. Each customer can place 3 orders/min.
+// IP-only fallback (no mobile) allows 30 orders/min to accommodate shared-Wi-Fi scenarios.
+const orderLimiter = rateLimit({
+  windowMs: 60000,
+  max: 3,
+  message: "Too many order requests from this device. Please wait a moment.",
+  keyGenerator: (req) => {
+    const ip = req.ip || "unknown";
+    const mobile = req.body?.customer?.mobile;
+    // If mobile is available, rate-limit per customer (3/min is very generous for one person)
+    if (mobile && typeof mobile === "string" && mobile.trim()) {
+      return `order:${ip}:${mobile.trim()}`;
+    }
+    // No mobile yet (shouldn't reach Order.create, but safety): use IP with higher threshold
+    return `order:ip:${ip}`;
+  },
+});
+
+// Separate broader IP-level limit: 30 orders/min from any single IP (anti-bot protection)
+const orderIpLimiter = rateLimit({
+  windowMs: 60000,
+  max: 30,
+  message: "Too many orders from this network. Please try again shortly.",
+});
 
 // ── Public: reverse geocode lat/lng → readable address via Nominatim ──
 // We proxy this on the backend so the client never talks to Nominatim
@@ -81,7 +109,7 @@ router.get("/geocode/reverse", async (req, res) => {
   }
 });
 
-router.post("/", createOrder);
+router.post("/", orderIpLimiter, orderLimiter, createOrder);
 
 router.get("/", protect, getOrders);
 

@@ -2,6 +2,7 @@ const Order    = require("../models/Order");
 const Bill     = require("../models/Bill");
 const Customer = require("../models/Customer");
 const Setting  = require("../models/Setting");
+const mongoose = require("mongoose");
 const { sendBillWhatsApp } = require("../services/whatsapp.service");
 const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
 
@@ -52,8 +53,8 @@ exports.getUnpaidOrders = async (req, res) => {
 
 // ── POST /api/billing/generate ──────────────────────────────────
 exports.generateBill = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
-    // per-request restaurantId from req.user (set by adminOrStaff), fallback to env
     const restaurantId = req.user?.restaurantId || DEFAULT_RESTAURANT_ID;
 
     const rawOrderIds = req.body.orderIds;
@@ -65,19 +66,30 @@ exports.generateBill = async (req, res) => {
       return res.status(400).json({ success: false, message: "Please select orders." });
     }
 
+    // Validate payment method
+    if (!["Cash", "UPI", "Card"].includes(paymentMethod)) {
+      return res.status(400).json({ success: false, message: "Invalid payment method." });
+    }
+
+    // Start transaction
+    session.startTransaction();
+
+    // Find qualifying orders within transaction — atomically ensures no concurrent bill
     const orders = await Order.find({
       _id:           { $in: orderIds },
       restaurantId,
       status:        "COMPLETED",
       paymentStatus: "PENDING",
       $or: [{ billId: null }, { billId: { $exists: false } }],
-    }).populate("customerId", "name mobile");
+    }).populate("customerId", "name mobile").session(session);
 
     if (orders.length === 0) {
+      await session.abortTransaction();
       return res.status(400).json({ success: false, message: "No unpaid completed orders found." });
     }
 
     if (orders.length !== orderIds.length) {
+      await session.abortTransaction();
       return res.status(400).json({ success: false, message: "Some selected orders are already billed or invalid." });
     }
 
@@ -94,9 +106,16 @@ exports.generateBill = async (req, res) => {
 
     const subtotal   = Math.round(rawSubtotal * 100) / 100;
     const gst        = Math.round(subtotal * 0.05 * 100) / 100;
-    const grandTotal = Math.max(0, subtotal + gst - discount);
+    const grandTotal = Math.round(Math.max(0, subtotal + gst - discount) * 100) / 100;
 
-    const bill = await Bill.create({
+    // Validate discount
+    if (discount > subtotal + gst) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: "Discount cannot exceed subtotal + GST." });
+    }
+
+    // Create bill inside transaction
+    const [bill] = await Bill.create([{
       restaurantId,
       tableNumber,
       orderIds,
@@ -108,11 +127,18 @@ exports.generateBill = async (req, res) => {
       paymentMethod,
       paymentStatus: "Pending",
       invoiceNumber: generateInvoiceNumber(),
-      // BUG 14 FIX: record who generated the bill
       generatedBy:   req.user?._id || null,
-    });
+    }], { session });
 
-    await Order.updateMany({ _id: { $in: orderIds } }, { $set: { billId: bill._id } });
+    // Update orders to reference this bill — inside same transaction
+    await Order.updateMany(
+      { _id: { $in: orderIds } },
+      { $set: { billId: bill._id } },
+      { session }
+    );
+
+    // Commit — both bill + order updates succeed atomically
+    await session.commitTransaction();
 
     const customerMobile = orders[0].customerId?.mobile || "";
     const customerName   = orders[0].customerId?.name   || "";
@@ -142,8 +168,14 @@ exports.generateBill = async (req, res) => {
       paymentSettings: { upiId, restaurantName },
     });
   } catch (error) {
-    console.error(error);
+    // Abort transaction if it's still active
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+    console.error("[Billing] generateBill error:", error.message);
     return res.status(500).json({ success: false, message: "Failed to generate bill." });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -194,12 +226,18 @@ exports.cancelBill = async (req, res) => {
 exports.getBillHistory = async (req, res) => {
   try {
     const restaurantId = req.user?.restaurantId || DEFAULT_RESTAURANT_ID;
+    const { page = 1, limit = 50 } = req.query;
+
+    const skip  = (Number(page) - 1) * Number(limit);
+    const total = await Bill.countDocuments({ restaurantId });
 
     const bills = await Bill.find({ restaurantId })
       .populate({ path: "orderIds", populate: { path: "customerId", select: "name mobile" } })
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit));
 
-    return res.status(200).json({ success: true, count: bills.length, bills });
+    return res.status(200).json({ success: true, count: bills.length, total, page: Number(page), limit: Number(limit), bills });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ success: false, message: "Failed to fetch bill history." });

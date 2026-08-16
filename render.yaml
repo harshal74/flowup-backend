@@ -10,7 +10,7 @@ services:
       - key: PORT
         value: 10000
       - key: RESTAURANT_ID
-        value: FLOWUP001
+        sync: false
       - key: MONGO_URI
         sync: false
       - key: JWT_SECRET
