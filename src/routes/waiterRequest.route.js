@@ -5,6 +5,7 @@ const {
   updateWaiterRequestStatus,
   deleteWaiterRequest,
   deleteAllWaiterRequests,
+  resolveTable,
 } = require("../controllers/waiterRequest.controller");
 const protect    = require("../middleware/auth.middleware");
 const staffAuth  = require("../middleware/staffAuth");
@@ -29,6 +30,7 @@ const router = express.Router();
 router.post("/",    createWaiterRequest);                              // public — customer
 router.get("/",     adminOrStaff, getWaiterRequests);                 // admin OR staff
 router.patch("/:id/status", adminOrStaff, updateWaiterRequestStatus); // admin OR staff
+router.patch("/resolve-table/:tableNumber", adminOrStaff, resolveTable); // admin OR staff — bulk resolve
 router.delete("/all", protect, deleteAllWaiterRequests);              // admin only
 router.delete("/:id",  adminOrStaff, deleteWaiterRequest);            // admin OR staff
 

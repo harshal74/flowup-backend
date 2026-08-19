@@ -139,10 +139,56 @@ const deleteAllWaiterRequests = async (req, res) => {
   }
 };
 
+// ── Resolve all active requests for a specific table ──────────────
+const resolveTable = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const tableNumber = Number(req.params.tableNumber);
+
+    if (!tableNumber || tableNumber < 1) {
+      return res.status(400).json({ success: false, message: "Valid table number is required" });
+    }
+
+    // Find all active requests for this table
+    const active = await WaiterRequest.find({
+      restaurantId,
+      tableNumber,
+      status: { $in: ["PENDING", "ACCEPTED"] },
+    });
+
+    if (active.length === 0) {
+      return res.status(200).json({ success: true, message: "No active requests for this table", resolved: 0 });
+    }
+
+    // Bulk update all to COMPLETED
+    await WaiterRequest.updateMany(
+      { restaurantId, tableNumber, status: { $in: ["PENDING", "ACCEPTED"] } },
+      { $set: { status: "COMPLETED" } }
+    );
+
+    // Emit events so all connected clients update immediately
+    active.forEach(r => {
+      emitToRestaurant(restaurantId, "waiter_request_updated", {
+        _id: r._id.toString(), status: "COMPLETED", tableNumber: r.tableNumber,
+      });
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Table ${tableNumber} resolved — ${active.length} request${active.length !== 1 ? 's' : ''} completed`,
+      resolved: active.length,
+    });
+  } catch (error) {
+    console.error("Resolve Table Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 module.exports = {
   createWaiterRequest,
   getWaiterRequests,
   updateWaiterRequestStatus,
   deleteWaiterRequest,
   deleteAllWaiterRequests,
+  resolveTable,
 };
