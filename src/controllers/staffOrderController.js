@@ -123,10 +123,70 @@ exports.readyOrder = (req, res) =>
   });
 
 // ── PATCH /api/staff/orders/:id/deliver ──────────────────────────
-exports.deliverOrder = (req, res) =>
-  transitionOrder(req, res, {
-    fromStatus: "READY",
+// Dine-in: READY → COMPLETED
+// Delivery that's already OUT_FOR_DELIVERY: OUT_FOR_DELIVERY → COMPLETED
+exports.deliverOrder = async (req, res) => {
+  const { id } = req.params;
+  const restaurantId = req.staff.restaurantId;
+
+  if (!isValidId(id)) {
+    return res.status(400).json({ success: false, message: "Invalid order ID format" });
+  }
+
+  const order = await Order.findOne({ _id: id, restaurantId });
+  if (!order) {
+    return res.status(404).json({ success: false, message: "Order not found" });
+  }
+
+  // For dine-in: READY → COMPLETED
+  // For delivery: OUT_FOR_DELIVERY → COMPLETED
+  const allowedFrom = order.orderType === "DELIVERY" ? "OUT_FOR_DELIVERY" : "READY";
+
+  if (order.status !== allowedFrom) {
+    return res.status(409).json({
+      success: false,
+      message: `Order is in '${order.status}' status — expected '${allowedFrom}'.`,
+    });
+  }
+
+  return transitionOrder(req, res, {
+    fromStatus: allowedFrom,
     toStatus:   "COMPLETED",
     staffField: "servedBy",
-    action:     "Delivered Order",
+    action:     order.orderType === "DELIVERY" ? "Completed Delivery" : "Delivered Order",
   });
+};
+
+// ── PATCH /api/staff/orders/:id/dispatch ─────────────────────────
+// Delivery orders only: READY → OUT_FOR_DELIVERY
+exports.dispatchOrder = async (req, res) => {
+  const { id } = req.params;
+  const restaurantId = req.staff.restaurantId;
+
+  if (!isValidId(id)) {
+    return res.status(400).json({ success: false, message: "Invalid order ID format" });
+  }
+
+  const order = await Order.findOne({ _id: id, restaurantId });
+  if (!order) {
+    return res.status(404).json({ success: false, message: "Order not found" });
+  }
+
+  if (order.orderType !== "DELIVERY") {
+    return res.status(400).json({ success: false, message: "Dispatch is only for delivery orders" });
+  }
+
+  if (order.status !== "READY") {
+    return res.status(409).json({
+      success: false,
+      message: `Cannot dispatch — order is in '${order.status}' status, expected 'READY'.`,
+    });
+  }
+
+  return transitionOrder(req, res, {
+    fromStatus: "READY",
+    toStatus:   "OUT_FOR_DELIVERY",
+    staffField: "servedBy",
+    action:     "Dispatched Delivery",
+  });
+};

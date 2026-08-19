@@ -41,6 +41,7 @@ router.patch("/orders/:id/preparing", staffAuth, requireRole("CHEF", "ADMIN"),  
 router.patch("/orders/:id/ready",     staffAuth, requireRole("CHEF", "ADMIN"),   orderCtrl.readyOrder);
 
 // ── Order delivery (Waiter + Admin) ──────────────────────────────
+router.patch("/orders/:id/dispatch",  staffAuth, requireRole("WAITER", "ADMIN"), orderCtrl.dispatchOrder);
 router.patch("/orders/:id/deliver",   staffAuth, requireRole("WAITER", "ADMIN"), orderCtrl.deliverOrder);
 
 module.exports = router;
