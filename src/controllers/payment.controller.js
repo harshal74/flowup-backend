@@ -20,6 +20,7 @@ const Customer      = require("../models/Customer");
 const Setting       = require("../models/Setting");
 const { emitToRestaurant } = require("../socket");
 const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
+const { validateDeliveryLocation } = require("../utils/validateLocation");
 
 const INTENT_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -140,6 +141,12 @@ exports.createPaymentOrder = async (req, res) => {
     }
     if (!address && !customer.address) {
       return res.status(400).json({ success: false, message: "Delivery address is required." });
+    }
+
+    // ── Delivery location enforcement ─────────────────────────
+    const locResult = validateDeliveryLocation(deliveryLocation);
+    if (!locResult.valid) {
+      return res.status(400).json({ success: false, message: locResult.message });
     }
 
     // ── Validate restaurant setting ───────────────────────────
@@ -344,21 +351,37 @@ exports.verifyAndCreateOrder = async (req, res) => {
 exports.razorpayWebhook = async (req, res) => {
   try {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-    if (!webhookSecret) return res.status(200).json({ status: "ok" });
+    if (!webhookSecret) {
+      console.warn("[Webhook] RAZORPAY_WEBHOOK_SECRET not configured — skipping");
+      return res.status(200).json({ status: "ok" });
+    }
 
-    // ── Verify webhook signature ──────────────────────────────
+    // ── Verify webhook signature using RAW request body ───────
+    // Razorpay signs the exact bytes of the HTTP body. We must use
+    // req.rawBody (captured by Express verify option) — NOT JSON.stringify.
     const signature = req.headers["x-razorpay-signature"];
-    if (!signature) return res.status(400).json({ status: "missing signature" });
+    if (!signature) {
+      console.warn("[Webhook] Missing X-Razorpay-Signature header");
+      return res.status(400).json({ status: "missing signature" });
+    }
+
+    const bodyToVerify = req.rawBody;
+    if (!bodyToVerify) {
+      console.warn("[Webhook] Raw body missing — cannot verify signature");
+      return res.status(400).json({ status: "raw body missing" });
+    }
 
     const expected = crypto
       .createHmac("sha256", webhookSecret)
-      .update(JSON.stringify(req.body))
+      .update(bodyToVerify)
       .digest("hex");
 
     if (expected !== signature) {
-      console.warn("[Webhook] Invalid signature");
+      console.warn("[Webhook] Signature verification FAILED");
       return res.status(400).json({ status: "invalid signature" });
     }
+
+    console.log(`[Webhook] ✓ Signature verified — event: ${req.body.event}`);
 
     const event = req.body.event;
     const payload = req.body.payload;
@@ -371,6 +394,8 @@ exports.razorpayWebhook = async (req, res) => {
       const razorpayOrderId   = payment.order_id;
       const razorpayPaymentId = payment.id;
 
+      console.log(`[Webhook] payment.captured — orderId: ${razorpayOrderId}, paymentId: ${razorpayPaymentId}`);
+
       // Atomically transition: CREATED → PAID
       const intent = await PaymentIntent.findOneAndUpdate(
         { razorpayOrderId, status: { $in: ["CREATED", "PAID"] } },
@@ -379,9 +404,11 @@ exports.razorpayWebhook = async (req, res) => {
       );
 
       if (!intent) {
-        // Already processed or doesn't exist
+        console.log(`[Webhook] PaymentIntent not found or already processed for razorpayOrderId: ${razorpayOrderId}`);
         return res.status(200).json({ status: "already_processed" });
       }
+
+      console.log(`[Webhook] PaymentIntent ${intent._id} transitioned to PAID`);
 
       // Atomically transition: PAID → ORDER_CREATED
       const transitioned = await PaymentIntent.findOneAndUpdate(
@@ -391,7 +418,7 @@ exports.razorpayWebhook = async (req, res) => {
       );
 
       if (!transitioned || transitioned.status !== "ORDER_CREATED") {
-        // Frontend verification won the race — that's fine
+        console.log(`[Webhook] Lost race to frontend verification — order already being created`);
         return res.status(200).json({ status: "race_lost_ok" });
       }
 

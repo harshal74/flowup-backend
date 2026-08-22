@@ -54,7 +54,16 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({
+  limit: "2mb",
+  // Capture raw body for Razorpay webhook signature verification.
+  // Only stored for the webhook path to avoid unnecessary memory usage.
+  verify: (req, _res, buf) => {
+    if (req.url === "/api/payment/webhook" || req.originalUrl === "/api/payment/webhook") {
+      req.rawBody = buf.toString("utf8");
+    }
+  },
+}));
 
 // Health Check
 app.get("/", (req, res) => {

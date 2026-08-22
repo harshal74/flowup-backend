@@ -5,6 +5,7 @@ const Customer = require("../models/Customer");
 const Setting  = require("../models/Setting");
 const { emitToRestaurant } = require("../socket");
 const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
+const { validateDeliveryLocation } = require("../utils/validateLocation");
 
 // ─────────────────────────────────────────────────────────────────
 // Create Order  (public — no auth required)
@@ -97,6 +98,14 @@ const createOrder = async (req, res) => {
 
     if (orderType === "DELIVERY" && !customer.address && !address) {
       return res.status(400).json({ success: false, message: "Delivery address is required" });
+    }
+
+    // ── Delivery location enforcement ─────────────────────────
+    if (orderType === "DELIVERY") {
+      const locResult = validateDeliveryLocation(deliveryLocation);
+      if (!locResult.valid) {
+        return res.status(400).json({ success: false, message: locResult.message });
+      }
     }
 
     // Find / create customer
