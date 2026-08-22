@@ -114,6 +114,13 @@ const settingSchema = new mongoose.Schema(
       min: 1,
       max: 200,
     },
+
+    // Delivery payment policy
+    deliveryPaymentMode: {
+      type: String,
+      enum: ["COD", "PAYMENT_FIRST", "BOTH"],
+      default: "COD",
+    },
   },
   {
     timestamps: true,

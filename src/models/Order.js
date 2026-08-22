@@ -174,6 +174,23 @@ const orderSchema = new mongoose.Schema(
       default: "PENDING",
     },
 
+    paymentMethod: {
+      type: String,
+      enum: ["COD", "ONLINE"],
+      default: "COD",
+    },
+
+    // Razorpay payment references (online payments only)
+    razorpayOrderId: {
+      type: String,
+      default: null,
+    },
+
+    razorpayPaymentId: {
+      type: String,
+      default: null,
+    },
+
     estimatedTime: {
       type: Number,
       default: null,
@@ -274,6 +291,12 @@ orderSchema.index({
 orderSchema.index(
   { restaurantId: 1, idempotencyKey: 1 },
   { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string" } } }
+);
+
+// Razorpay payment lookup — used by webhook reconciliation and duplicate prevention
+orderSchema.index(
+  { razorpayPaymentId: 1 },
+  { sparse: true }
 );
 
 module.exports = mongoose.models.Order || mongoose.model("Order", orderSchema);

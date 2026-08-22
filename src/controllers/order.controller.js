@@ -24,6 +24,21 @@ const createOrder = async (req, res) => {
       });
     }
 
+    // ── Delivery payment mode enforcement ──────────────────────
+    // If restaurant requires PAYMENT_FIRST for delivery, reject COD attempts here.
+    // The PAYMENT_FIRST flow uses /api/payment/verify-and-create-order instead.
+    if (orderType === "DELIVERY") {
+      const deliveryMode = settings?.deliveryPaymentMode || "COD";
+      if (deliveryMode === "PAYMENT_FIRST") {
+        return res.status(400).json({
+          success: false,
+          message: "This restaurant requires online payment for delivery orders. Please use the online payment option.",
+        });
+      }
+      // If mode is "BOTH", the customer can use this endpoint for COD.
+      // Online payments go through /api/payment/verify-and-create-order.
+    }
+
     if (!customer) {
       return res.status(400).json({ success: false, message: "Customer details are required" });
     }
@@ -166,6 +181,7 @@ const createOrder = async (req, res) => {
         ? { deliveryLocation }
         : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
+      paymentMethod: orderType === "DELIVERY" ? "COD" : "COD",
     });
 
     // Update customer stats

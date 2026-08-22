@@ -12,6 +12,7 @@ const waiterRequestRoutes = require("./routes/waiterRequest.route");
 const billingRoutes = require("./routes/billing.route");
 const staffRoutes   = require("./routes/staffRoutes");
 const adminStaffRoutes = require("./routes/adminStaff.route");
+const paymentRoutes = require("./routes/payment.route");
 
 const app = express();
 
@@ -72,6 +73,7 @@ app.use("/api/waiter-requests", waiterRequestRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/staff",   staffRoutes);
 app.use("/api/admin/staff", adminStaffRoutes);
+app.use("/api/payment", paymentRoutes);
 
 // ── 404 handler for unknown API routes ────────────────────────────
 app.use("/api/{*path}", (req, res) => {
