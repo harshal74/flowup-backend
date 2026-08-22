@@ -10,9 +10,9 @@ const getDashboardStats = async (req, res) => {
     const totalCustomers = await Customer.countDocuments({ restaurantId });
     const totalMenuItems = await Menu.countDocuments({ restaurantId });
 
-    // BUG C FIX: use aggregation instead of loading all documents into memory
+    // Revenue = actually collected money (COMPLETED + PAID only)
     const [revenueResult] = await Order.aggregate([
-      { $match: { restaurantId, status: "COMPLETED" } },
+      { $match: { restaurantId, status: "COMPLETED", paymentStatus: "PAID" } },
       { $group: { _id: null, totalRevenue: { $sum: "$totalAmount" } } },
     ]);
     const totalRevenue = revenueResult?.totalRevenue || 0;
@@ -115,7 +115,7 @@ function getDateRange(period, offset) {
 async function buildRevenueChart(restaurantId, period, offset) {
   const { start, end } = getDateRange(period, offset);
 
-  const matchQuery = { restaurantId, status: "COMPLETED" };
+  const matchQuery = { restaurantId, status: "COMPLETED", paymentStatus: "PAID" };
   if (start) matchQuery.createdAt = { $gte: start, $lte: end };
 
   const orders = await Order.find(matchQuery);
@@ -203,7 +203,7 @@ const getDashboardAnalytics = async (req, res) => {
       start ? { restaurantId, createdAt: { $gte: start, $lte: end } } : { restaurantId }
     );
 
-    const completedOrders = await Order.find({ ...currentMatch, status: "COMPLETED" });
+    const completedOrders = await Order.find({ ...currentMatch, status: "COMPLETED", paymentStatus: "PAID" });
     const totalRevenue = completedOrders.reduce((sum, o) => sum + o.totalAmount, 0);
 
     // Pending always shows live count
@@ -219,7 +219,7 @@ const getDashboardAnalytics = async (req, res) => {
 
     if (period !== "total") {
       const prevOrdersCount = await Order.countDocuments(prevMatch);
-      const prevCompleted = await Order.find({ ...prevMatch, status: "COMPLETED" });
+      const prevCompleted = await Order.find({ ...prevMatch, status: "COMPLETED", paymentStatus: "PAID" });
       const prevRevenue = prevCompleted.reduce((sum, o) => sum + o.totalAmount, 0);
       const prevCustomers = await Customer.countDocuments(
         prev.start ? { restaurantId, createdAt: { $gte: prev.start, $lte: prev.end } } : { restaurantId }
