@@ -191,6 +191,38 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Refund tracking
+    refundStatus: {
+      type: String,
+      enum: ["NONE", "PENDING", "PROCESSING", "PROCESSED", "FAILED"],
+      default: "NONE",
+    },
+
+    refundId: {
+      type: String,
+      default: null,
+    },
+
+    refundAmount: {
+      type: Number,
+      default: null,
+    },
+
+    refundInitiatedAt: {
+      type: Date,
+      default: null,
+    },
+
+    refundProcessedAt: {
+      type: Date,
+      default: null,
+    },
+
+    refundFailureReason: {
+      type: String,
+      default: null,
+    },
+
     estimatedTime: {
       type: Number,
       default: null,

@@ -425,7 +425,12 @@ exports.razorpayWebhook = async (req, res) => {
         const order = await Order.findOne({ razorpayPaymentId: refund.payment_id });
         if (order && order.paymentStatus !== "REFUNDED") {
           order.paymentStatus = "REFUNDED";
+          order.refundStatus = "PROCESSED";
+          order.refundId = order.refundId || refund.id;
+          order.refundAmount = (refund.amount || 0) / 100; // paise → rupees
+          order.refundProcessedAt = new Date();
           await order.save();
+          console.log(`[Webhook] Refund ${refund.id} confirmed for order ${order.orderNumber}`);
         }
         await PaymentIntent.findOneAndUpdate(
           { razorpayPaymentId: refund.payment_id },
@@ -473,33 +478,58 @@ exports.refundPayment = async (req, res) => {
     const restaurantId = req.user.restaurantId;
     const { orderId } = req.params;
 
-    const order = await Order.findOne({ _id: orderId, restaurantId });
-    if (!order) return res.status(404).json({ success: false, message: "Order not found." });
-    if (order.paymentMethod !== "ONLINE") return res.status(400).json({ success: false, message: "Only online-paid orders can be refunded." });
-    if (order.paymentStatus === "REFUNDED") return res.status(400).json({ success: false, message: "Already refunded." });
-    if (order.paymentStatus !== "PAID") return res.status(400).json({ success: false, message: "Payment is not in PAID status." });
-    if (!order.razorpayPaymentId) return res.status(400).json({ success: false, message: "No payment ID." });
-
-    const refund = await razorpay.payments.refund(order.razorpayPaymentId, {
-      amount: Math.round(order.totalAmount * 100),
-      notes: { reason: "Order rejected", flowup_order: order.orderNumber, restaurant: restaurantId },
-    });
-
-    order.paymentStatus = "REFUNDED";
-    await order.save();
-
-    // Also update PaymentIntent
-    await PaymentIntent.findOneAndUpdate(
-      { razorpayPaymentId: order.razorpayPaymentId },
-      { $set: { status: "REFUNDED" } }
+    // Atomic lock: only transition FAILED → PROCESSING (retry scenario)
+    const locked = await Order.findOneAndUpdate(
+      {
+        _id: orderId,
+        restaurantId,
+        paymentMethod: "ONLINE",
+        paymentStatus: "PAID",
+        refundStatus: "FAILED",
+        razorpayPaymentId: { $exists: true, $ne: null },
+      },
+      { $set: { refundStatus: "PROCESSING", refundInitiatedAt: new Date(), refundFailureReason: null } },
+      { new: true }
     );
 
-    return res.status(200).json({ success: true, message: `Refund of ₹${order.totalAmount} initiated.`, refundId: refund.id });
+    if (!locked) {
+      // Check why lock failed
+      const order = await Order.findOne({ _id: orderId, restaurantId });
+      if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+      if (order.paymentMethod !== "ONLINE") return res.status(400).json({ success: false, message: "Only online-paid orders can be refunded." });
+      if (order.refundStatus === "PROCESSED" || order.paymentStatus === "REFUNDED") return res.status(400).json({ success: false, message: "Already refunded." });
+      if (order.refundStatus === "PROCESSING") return res.status(409).json({ success: false, message: "Refund is already being processed." });
+      if (order.paymentStatus !== "PAID") return res.status(400).json({ success: false, message: "Payment is not in PAID status." });
+      return res.status(400).json({ success: false, message: "Refund is not in a retryable state." });
+    }
+
+    // We have the lock — call Razorpay
+    try {
+      const refund = await razorpay.payments.refund(locked.razorpayPaymentId, {
+        amount: Math.round(locked.totalAmount * 100),
+        notes: { reason: "Admin retry refund", flowup_order: locked.orderNumber, restaurant: restaurantId },
+      });
+
+      await Order.findByIdAndUpdate(locked._id, {
+        $set: {
+          refundStatus: "PROCESSED",
+          refundId: refund.id,
+          refundAmount: locked.totalAmount,
+          refundProcessedAt: new Date(),
+          paymentStatus: "REFUNDED",
+        },
+      });
+
+      console.log(`[Refund Retry] ✓ ${refund.id} for order ${locked.orderNumber}`);
+      return res.status(200).json({ success: true, message: `Refund of ₹${locked.totalAmount} processed.`, refundId: refund.id });
+    } catch (refundErr) {
+      const errMsg = refundErr.error?.description || refundErr.message || "Unknown error";
+      await Order.findByIdAndUpdate(locked._id, { $set: { refundStatus: "FAILED", refundFailureReason: errMsg } });
+      console.error(`[Refund Retry] ✗ Order ${locked.orderNumber}:`, errMsg);
+      return res.status(500).json({ success: false, message: `Refund failed: ${errMsg}` });
+    }
   } catch (error) {
     console.error("[Refund] Error:", error.message);
-    if (error.statusCode === 400) {
-      return res.status(400).json({ success: false, message: error.error?.description || "Refund rejected by gateway." });
-    }
     return res.status(500).json({ success: false, message: "Failed to process refund." });
   }
 };

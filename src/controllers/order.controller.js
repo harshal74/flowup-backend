@@ -327,12 +327,12 @@ const rejectOrder = async (req, res) => {
   try {
     const { reason = "" } = req.body || {};
     const restaurantId = req.user.restaurantId;
-    const order = await Order.findOne({ _id: req.params.id, restaurantId });
 
+    // First, verify order exists and is rejectable
+    const order = await Order.findOne({ _id: req.params.id, restaurantId });
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
-
     if (order.status !== "PENDING") {
       return res.status(409).json({
         success: false,
@@ -340,16 +340,145 @@ const rejectOrder = async (req, res) => {
       });
     }
 
+    // ── ONLINE + PAID → atomic refund lock ────────────────────
+    if (order.paymentMethod === "ONLINE" && order.paymentStatus === "PAID" && order.razorpayPaymentId) {
+
+      // Atomic transition: NONE → PROCESSING (only one request wins)
+      const locked = await Order.findOneAndUpdate(
+        {
+          _id: order._id,
+          restaurantId,
+          status: "PENDING",
+          paymentMethod: "ONLINE",
+          paymentStatus: "PAID",
+          refundStatus: "NONE",
+          razorpayPaymentId: { $exists: true, $ne: null },
+        },
+        {
+          $set: {
+            refundStatus: "PROCESSING",
+            refundInitiatedAt: new Date(),
+          },
+        },
+        { new: true }
+      );
+
+      if (!locked) {
+        // Could not acquire lock — check current state
+        const current = await Order.findById(order._id);
+        if (current.refundStatus === "PROCESSING") {
+          return res.status(409).json({ success: false, message: "Refund is already being processed." });
+        }
+        if (current.refundStatus === "PROCESSED" || current.paymentStatus === "REFUNDED") {
+          return res.status(409).json({ success: false, message: "Refund has already been completed." });
+        }
+        if (current.status === "REJECTED") {
+          return res.status(409).json({ success: false, message: "Order is already rejected." });
+        }
+        return res.status(409).json({ success: false, message: "Cannot process refund in current state." });
+      }
+
+      // We have the lock — call Razorpay
+      const Razorpay = require("razorpay");
+      const keyId = process.env.RAZORPAY_KEY_ID;
+      const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+      if (!keyId || !keySecret) {
+        // No gateway configured — mark FAILED, reject order
+        await Order.findByIdAndUpdate(locked._id, {
+          $set: {
+            refundStatus: "FAILED",
+            refundFailureReason: "Payment gateway credentials not configured",
+            status: "REJECTED",
+            rejectedAt: new Date(),
+            rejectionReason: reason,
+          },
+        });
+        const updated = await Order.findById(locked._id);
+        emitToRestaurant(restaurantId, "order_status_updated", {
+          orderId: updated._id, status: "REJECTED", rejectedAt: updated.rejectedAt,
+          rejectionReason: reason, paymentStatus: updated.paymentStatus, refundStatus: updated.refundStatus,
+        });
+        return res.status(200).json({
+          success: true,
+          message: "Order rejected. Refund could not be processed (gateway not configured).",
+          data: updated, refundFailed: true,
+        });
+      }
+
+      try {
+        const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
+        const refundAmountPaise = Math.round(locked.totalAmount * 100);
+
+        const refund = await razorpay.payments.refund(locked.razorpayPaymentId, {
+          amount: refundAmountPaise,
+          notes: { reason: reason || "Order rejected", flowup_order: locked.orderNumber, restaurant: restaurantId },
+        });
+
+        // Razorpay accepted the refund — update order atomically
+        const refunded = await Order.findByIdAndUpdate(locked._id, {
+          $set: {
+            status: "REJECTED",
+            rejectedAt: new Date(),
+            rejectionReason: reason,
+            refundStatus: "PROCESSED",
+            refundId: refund.id,
+            refundAmount: locked.totalAmount,
+            refundProcessedAt: new Date(),
+            paymentStatus: "REFUNDED",
+          },
+        }, { new: true });
+
+        console.log(`[Refund] ✓ ${refund.id} for order ${locked.orderNumber} — ₹${locked.totalAmount}`);
+
+        emitToRestaurant(restaurantId, "order_status_updated", {
+          orderId: refunded._id, status: "REJECTED", rejectedAt: refunded.rejectedAt,
+          rejectionReason: reason, paymentStatus: "REFUNDED", refundStatus: "PROCESSED",
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: `Order rejected — refund of ₹${locked.totalAmount} initiated.`,
+          data: refunded,
+          refund: { refundId: refund.id, status: refund.status, amount: locked.totalAmount },
+        });
+      } catch (refundErr) {
+        // Razorpay call failed — mark FAILED, still reject order
+        const errMsg = refundErr.error?.description || refundErr.message || "Unknown refund error";
+        console.error(`[Refund] ✗ Order ${locked.orderNumber}:`, errMsg);
+
+        await Order.findByIdAndUpdate(locked._id, {
+          $set: {
+            refundStatus: "FAILED",
+            refundFailureReason: errMsg,
+            status: "REJECTED",
+            rejectedAt: new Date(),
+            rejectionReason: reason,
+          },
+        });
+        const failed = await Order.findById(locked._id);
+
+        emitToRestaurant(restaurantId, "order_status_updated", {
+          orderId: failed._id, status: "REJECTED", rejectedAt: failed.rejectedAt,
+          rejectionReason: reason, paymentStatus: failed.paymentStatus, refundStatus: "FAILED",
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: "Order rejected, but refund failed. Please retry the refund.",
+          data: failed, refundFailed: true, refundError: errMsg,
+        });
+      }
+    }
+
+    // ── Non-online or non-paid orders: simple rejection ───────
     order.status = "REJECTED";
     order.rejectedAt = new Date();
     order.rejectionReason = reason;
     await order.save();
 
-    emitToRestaurant(order.restaurantId, "order_status_updated", {
-      orderId: order._id,
-      status: order.status,
-      rejectedAt: order.rejectedAt,
-      rejectionReason: reason,
+    emitToRestaurant(restaurantId, "order_status_updated", {
+      orderId: order._id, status: "REJECTED", rejectedAt: order.rejectedAt, rejectionReason: reason,
     });
 
     return res.status(200).json({ success: true, message: "Order rejected successfully", data: order });
