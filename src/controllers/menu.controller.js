@@ -66,39 +66,34 @@ const getAdminMenus = async (req, res) => {
 
 const getPublicMenus = async (req, res) => {
   try {
-    const { restaurantId } = req.query;
+    const restaurantId = req.restaurantId;
 
-    const menus = await Menu.find({
-      restaurantId,
-      isAvailable: true,
-    })
+    if (!restaurantId) {
+      return res.status(400).json({ success: false, message: "restaurantId is required" });
+    }
+
+    const menus = await Menu.find({ restaurantId, isAvailable: true })
       .populate("categoryId", "name")
       .sort({ displayOrder: 1 });
 
-    return res.status(200).json({
-      success: true,
-      count: menus.length,
-      data: menus,
-    });
+    return res.status(200).json({ success: true, count: menus.length, data: menus });
   } catch (error) {
     console.error(error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
-// Get Menu By Id — scoped by restaurant for admin, public lookup by ID for customer
+// Get Menu By Id — always scoped by restaurant (resolver or JWT)
 const getMenuById = async (req, res) => {
   try {
     if (badId(req.params.id, res)) return;
-    const restaurantId = req.user?.restaurantId;
-    const query = restaurantId
-      ? { _id: req.params.id, restaurantId }
-      : { _id: req.params.id };
-    const menu = await Menu.findOne(query).populate("categoryId", "name");
+    const restaurantId = req.restaurantId;
+
+    if (!restaurantId) {
+      return res.status(400).json({ success: false, message: "restaurantId is required" });
+    }
+
+    const menu = await Menu.findOne({ _id: req.params.id, restaurantId }).populate("categoryId", "name");
 
     if (!menu) {
       return res.status(404).json({ success: false, message: "Menu item not found" });
@@ -111,17 +106,17 @@ const getMenuById = async (req, res) => {
   }
 };
 
-// Get Menu By Category
+// Get Menu By Category — scoped by restaurant (resolver or JWT)
 const getMenusByCategory = async (req, res) => {
   try {
     const { categoryId } = req.params;
-    // Scope by restaurant — use authenticated user's ID or query param for public access
-    const restaurantId = req.user?.restaurantId || req.query.restaurantId;
+    const restaurantId = req.restaurantId;
 
-    const filter = { categoryId, isAvailable: true };
-    if (restaurantId) filter.restaurantId = restaurantId;
+    if (!restaurantId) {
+      return res.status(400).json({ success: false, message: "restaurantId is required" });
+    }
 
-    const menus = await Menu.find(filter);
+    const menus = await Menu.find({ categoryId, restaurantId, isAvailable: true });
 
     return res.status(200).json({
       success: true,

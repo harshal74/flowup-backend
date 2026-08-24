@@ -9,6 +9,7 @@ const {
 } = require("../controllers/waiterRequest.controller");
 const protect    = require("../middleware/auth.middleware");
 const staffAuth  = require("../middleware/staffAuth");
+const resolvePublicRestaurant = require("../middleware/resolvePublicRestaurant");
 const { tryStaffAuthMiddleware } = staffAuth;
 
 /**
@@ -27,7 +28,7 @@ function adminOrStaff(req, res, next) {
 
 const router = express.Router();
 
-router.post("/",    createWaiterRequest);                              // public — customer
+router.post("/",    resolvePublicRestaurant, createWaiterRequest);  // public — customer (restaurant validated)
 router.get("/",     adminOrStaff, getWaiterRequests);                 // admin OR staff
 router.patch("/:id/status", adminOrStaff, updateWaiterRequestStatus); // admin OR staff
 router.patch("/resolve-table/:tableNumber", adminOrStaff, resolveTable); // admin OR staff — bulk resolve

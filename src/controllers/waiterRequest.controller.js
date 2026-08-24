@@ -1,18 +1,22 @@
 const WaiterRequest = require("../models/WaiterRequest");
 const { emitToRestaurant } = require("../socket");
-const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
 
 // ── Create (public — called by customer) ─────────────────────────
 const createWaiterRequest = async (req, res) => {
   try {
     const { tableNumber, customerName, orderId } = req.body;
-    const restaurantId = DEFAULT_RESTAURANT_ID;
+
+    // Use validated restaurantId from resolvePublicRestaurant middleware
+    const restaurantId = req.restaurantId;
+    if (!restaurantId) {
+      return res.status(400).json({ success: false, message: "Restaurant context is required." });
+    }
 
     if (!tableNumber || tableNumber < 1) {
       return res.status(400).json({ success: false, message: "Table number is required" });
     }
 
-    // Block duplicate requests within 5 minutes from the same table
+    // Block duplicate requests within 5 minutes from the same table + restaurant
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
     const existing = await WaiterRequest.findOne({
       restaurantId, tableNumber, status: "PENDING",

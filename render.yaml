@@ -9,8 +9,6 @@ services:
         value: production
       - key: PORT
         value: 10000
-      - key: RESTAURANT_ID
-        sync: false
       - key: MONGO_URI
         sync: false
       - key: JWT_SECRET

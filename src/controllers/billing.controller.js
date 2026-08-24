@@ -4,7 +4,6 @@ const Customer = require("../models/Customer");
 const Setting  = require("../models/Setting");
 const mongoose = require("mongoose");
 const { sendBillWhatsApp } = require("../services/whatsapp.service");
-const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
 
 const generateInvoiceNumber = () => {
   const now  = new Date();
@@ -18,8 +17,7 @@ const generateInvoiceNumber = () => {
 // ── GET /api/billing/orders ─────────────────────────────────────
 exports.getUnpaidOrders = async (req, res) => {
   try {
-    // per-request restaurantId from req.user (set by adminOrStaff), fallback to env
-    const restaurantId = req.user?.restaurantId || DEFAULT_RESTAURANT_ID;
+    const restaurantId = req.user.restaurantId;
     const { customer, table } = req.query;
 
     let customerIds = [];
@@ -55,7 +53,7 @@ exports.getUnpaidOrders = async (req, res) => {
 exports.generateBill = async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const restaurantId = req.user?.restaurantId || DEFAULT_RESTAURANT_ID;
+    const restaurantId = req.user.restaurantId;
 
     const rawOrderIds = req.body.orderIds;
     const orderIds    = rawOrderIds ? [...new Set(rawOrderIds.map(String))] : [];
@@ -182,7 +180,7 @@ exports.generateBill = async (req, res) => {
 // ── PATCH /api/billing/:billId/confirm ──────────────────────────
 exports.confirmPayment = async (req, res) => {
   try {
-    const restaurantId = req.user?.restaurantId || DEFAULT_RESTAURANT_ID;
+    const restaurantId = req.user.restaurantId;
     const { billId } = req.params;
 
     const bill = await Bill.findOne({ _id: billId, restaurantId });
@@ -205,7 +203,7 @@ exports.confirmPayment = async (req, res) => {
 // ── DELETE /api/billing/:billId ─────────────────────────────────
 exports.cancelBill = async (req, res) => {
   try {
-    const restaurantId = req.user?.restaurantId || DEFAULT_RESTAURANT_ID;
+    const restaurantId = req.user.restaurantId;
     const { billId } = req.params;
 
     const bill = await Bill.findOne({ _id: billId, restaurantId });
@@ -225,7 +223,7 @@ exports.cancelBill = async (req, res) => {
 // ── GET /api/billing/history ────────────────────────────────────
 exports.getBillHistory = async (req, res) => {
   try {
-    const restaurantId = req.user?.restaurantId || DEFAULT_RESTAURANT_ID;
+    const restaurantId = req.user.restaurantId;
     const { page = 1, limit = 50 } = req.query;
 
     const skip  = (Number(page) - 1) * Number(limit);
@@ -247,7 +245,7 @@ exports.getBillHistory = async (req, res) => {
 // ── GET /api/billing/:billId ────────────────────────────────────
 exports.getBillById = async (req, res) => {
   try {
-    const restaurantId = req.user?.restaurantId || DEFAULT_RESTAURANT_ID;
+    const restaurantId = req.user.restaurantId;
     const { billId } = req.params;
 
     const bill = await Bill.findOne({ _id: billId, restaurantId })

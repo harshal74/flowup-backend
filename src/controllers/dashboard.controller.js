@@ -118,40 +118,43 @@ async function buildRevenueChart(restaurantId, period, offset) {
   const matchQuery = { restaurantId, status: "COMPLETED", paymentStatus: "PAID" };
   if (start) matchQuery.createdAt = { $gte: start, $lte: end };
 
-  const orders = await Order.find(matchQuery);
-
   if (period === "daily") {
+    const results = await Order.aggregate([
+      { $match: matchQuery },
+      { $group: { _id: { $hour: "$createdAt" }, revenue: { $sum: "$totalAmount" } } },
+    ]);
     const map = {};
-    orders.forEach((o) => {
-      const h = new Date(o.createdAt).getHours();
-      const label = `${h}:00`;
-      map[label] = (map[label] || 0) + o.totalAmount;
-    });
-    return Array.from({ length: 24 }, (_, h) => {
-      const label = `${h}:00`;
-      return { date: label, revenue: map[label] || 0 };
-    });
+    results.forEach(r => { map[r._id] = r.revenue; });
+    return Array.from({ length: 24 }, (_, h) => ({
+      date: `${h}:00`,
+      revenue: map[h] || 0,
+    }));
   }
 
   if (period === "weekly") {
     const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const results = await Order.aggregate([
+      { $match: matchQuery },
+      { $group: { _id: { $dayOfWeek: "$createdAt" }, revenue: { $sum: "$totalAmount" } } },
+    ]);
+    // MongoDB $dayOfWeek: 1=Sun, 2=Mon, ..., 7=Sat
     const map = {};
-    orders.forEach((o) => {
-      const d = new Date(o.createdAt).getDay();
-      const label = days[d === 0 ? 6 : d - 1];
-      map[label] = (map[label] || 0) + o.totalAmount;
+    results.forEach(r => {
+      const idx = r._id === 1 ? 6 : r._id - 2; // Convert to Mon=0..Sun=6
+      map[idx] = r.revenue;
     });
-    return days.map((d) => ({ date: d, revenue: map[d] || 0 }));
+    return days.map((d, i) => ({ date: d, revenue: map[i] || 0 }));
   }
 
   if (period === "monthly") {
     const { start: mStart } = getDateRange("monthly", offset);
     const daysInMonth = new Date(mStart.getFullYear(), mStart.getMonth() + 1, 0).getDate();
+    const results = await Order.aggregate([
+      { $match: matchQuery },
+      { $group: { _id: { $dayOfMonth: "$createdAt" }, revenue: { $sum: "$totalAmount" } } },
+    ]);
     const map = {};
-    orders.forEach((o) => {
-      const day = new Date(o.createdAt).getDate();
-      map[day] = (map[day] || 0) + o.totalAmount;
-    });
+    results.forEach(r => { map[r._id] = r.revenue; });
     return Array.from({ length: daysInMonth }, (_, i) => ({
       date: `${i + 1}`,
       revenue: map[i + 1] || 0,
@@ -160,11 +163,18 @@ async function buildRevenueChart(restaurantId, period, offset) {
 
   // total — last 12 months
   const now = new Date();
+  const results = await Order.aggregate([
+    { $match: matchQuery },
+    { $group: {
+      _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" } },
+      revenue: { $sum: "$totalAmount" },
+    }},
+  ]);
   const map = {};
-  orders.forEach((o) => {
-    const d = new Date(o.createdAt);
+  results.forEach(r => {
+    const d = new Date(r._id.year, r._id.month - 1, 1);
     const label = d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
-    map[label] = (map[label] || 0) + o.totalAmount;
+    map[label] = r.revenue;
   });
   return Array.from({ length: 12 }, (_, i) => {
     const d = new Date(now.getFullYear(), now.getMonth() - (11 - i), 1);
@@ -203,8 +213,12 @@ const getDashboardAnalytics = async (req, res) => {
       start ? { restaurantId, createdAt: { $gte: start, $lte: end } } : { restaurantId }
     );
 
-    const completedOrders = await Order.find({ ...currentMatch, status: "COMPLETED", paymentStatus: "PAID" });
-    const totalRevenue = completedOrders.reduce((sum, o) => sum + o.totalAmount, 0);
+    // Revenue via aggregation (avoids loading orders into Node.js memory)
+    const [revenueAgg] = await Order.aggregate([
+      { $match: { ...currentMatch, status: "COMPLETED", paymentStatus: "PAID" } },
+      { $group: { _id: null, totalRevenue: { $sum: "$totalAmount" } } },
+    ]);
+    const totalRevenue = revenueAgg?.totalRevenue || 0;
 
     // Pending always shows live count
     const pendingOrders = await Order.countDocuments({
@@ -219,8 +233,14 @@ const getDashboardAnalytics = async (req, res) => {
 
     if (period !== "total") {
       const prevOrdersCount = await Order.countDocuments(prevMatch);
-      const prevCompleted = await Order.find({ ...prevMatch, status: "COMPLETED", paymentStatus: "PAID" });
-      const prevRevenue = prevCompleted.reduce((sum, o) => sum + o.totalAmount, 0);
+
+      // Previous revenue via aggregation
+      const [prevRevenueAgg] = await Order.aggregate([
+        { $match: { ...prevMatch, status: "COMPLETED", paymentStatus: "PAID" } },
+        { $group: { _id: null, totalRevenue: { $sum: "$totalAmount" } } },
+      ]);
+      const prevRevenue = prevRevenueAgg?.totalRevenue || 0;
+
       const prevCustomers = await Customer.countDocuments(
         prev.start ? { restaurantId, createdAt: { $gte: prev.start, $lte: prev.end } } : { restaurantId }
       );

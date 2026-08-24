@@ -1,18 +1,38 @@
 const Customer = require("../models/Customer");
 const Order = require("../models/Order");
 
-// Get All Customers
+// Get All Customers (paginated)
 // Uses aggregation to join Order collection and attach
 // each customer's distinct orderTypes in a single DB query.
 const getCustomers = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
+    const { search, page = 1, limit = 50 } = req.query;
+
+    const effectiveLimit = Math.min(Number(limit) || 50, 100);
+    const effectivePage  = Math.max(Number(page) || 1, 1);
+    const skip = (effectivePage - 1) * effectiveLimit;
+
+    // Build match stage
+    const matchStage = { restaurantId };
+    if (search && search.trim()) {
+      const q = search.trim();
+      matchStage.$or = [
+        { name:   { $regex: q, $options: "i" } },
+        { mobile: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    // Get total count for pagination
+    const total = await Customer.countDocuments(matchStage);
 
     const customers = await Customer.aggregate([
-      // 1. Only this restaurant's customers
-      { $match: { restaurantId } },
+      { $match: matchStage },
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: effectiveLimit },
 
-      // 2. Join orders for each customer
+      // Join orders for each customer
       {
         $lookup: {
           from: "orders",
@@ -25,7 +45,7 @@ const getCustomers = async (req, res) => {
         },
       },
 
-      // 3. Derive distinct orderTypes array from joined orders
+      // Derive distinct orderTypes array from joined orders
       {
         $addFields: {
           orderTypes: {
@@ -34,16 +54,16 @@ const getCustomers = async (req, res) => {
         },
       },
 
-      // 4. Drop the full orders array — we only needed it for the types
+      // Drop the full orders array
       { $project: { orders: 0 } },
-
-      // 5. Latest first
-      { $sort: { createdAt: -1 } },
     ]);
 
     return res.status(200).json({
       success: true,
       count: customers.length,
+      total,
+      page: effectivePage,
+      limit: effectiveLimit,
       data: customers,
     });
   } catch (error) {

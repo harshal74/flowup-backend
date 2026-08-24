@@ -40,31 +40,11 @@ const createCategory = async (req, res) => {
   }
 };
 
-// Get All Categories (public for customer frontend via query param, admin via token)
+// Get All Categories (public for customer frontend via resolver, admin via token)
 const getCategories = async (req, res) => {
   try {
-    // Try multiple sources for restaurantId:
-    // 1. req.user (if protect middleware ran — e.g., from admin routes)
-    // 2. req.query.restaurantId (customer frontend passes this)
-    // 3. Decode the Authorization header inline (admin frontend sends token but route is public)
-    let restaurantId = req.user?.restaurantId || req.query.restaurantId;
-
-    if (!restaurantId) {
-      // Try to extract from Bearer token if present
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith("Bearer ")) {
-        try {
-          const jwt = require("jsonwebtoken");
-          const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET);
-          restaurantId = decoded.restaurantId;
-        } catch { /* token invalid/expired — ignore */ }
-      }
-    }
-
-    if (!restaurantId) {
-      // Final fallback for single-tenant deployments
-      restaurantId = process.env.RESTAURANT_ID;
-    }
+    // Use the resolver-provided restaurantId (already validated)
+    const restaurantId = req.restaurantId;
 
     if (!restaurantId) {
       return res.status(400).json({ success: false, message: "restaurantId is required" });
@@ -80,27 +60,19 @@ const getCategories = async (req, res) => {
   }
 };
 
-// Get Category By ID — public route, try token or query param for restaurant scope
+// Get Category By ID — always scoped by restaurant (resolver or JWT)
 const getCategoryById = async (req, res) => {
   try {
     const { id } = req.params;
     if (!isValidId(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
 
-    // For public route: try to scope by restaurant if identity is available
-    let restaurantId = req.user?.restaurantId || req.query.restaurantId;
+    const restaurantId = req.restaurantId;
+
     if (!restaurantId) {
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith("Bearer ")) {
-        try {
-          const jwt = require("jsonwebtoken");
-          const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET);
-          restaurantId = decoded.restaurantId;
-        } catch { /* ignore */ }
-      }
+      return res.status(400).json({ success: false, message: "restaurantId is required" });
     }
 
-    const query = restaurantId ? { _id: id, restaurantId } : { _id: id };
-    const category = await Category.findOne(query);
+    const category = await Category.findOne({ _id: id, restaurantId });
 
     if (!category) {
       return res.status(404).json({ success: false, message: "Category not found" });

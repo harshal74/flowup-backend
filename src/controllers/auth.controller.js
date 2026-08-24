@@ -1,5 +1,6 @@
 const bcrypt = require("bcryptjs");
 const Admin = require("../models/Admin");
+const Setting = require("../models/Setting");
 const { generateToken } = require("../utils/jwt");
 
 // Login Admin
@@ -47,6 +48,21 @@ const login = async (req, res) => {
         success: false,
         message: "Invalid email or password",
       });
+    }
+
+    // Check restaurant suspension (SUPER_ADMIN bypasses)
+    if (admin.role !== "SUPER_ADMIN") {
+      const settings = await Setting.findOne({ restaurantId: admin.restaurantId })
+        .select("accountStatus")
+        .lean();
+
+      if (settings?.accountStatus === "SUSPENDED") {
+        return res.status(403).json({
+          success: false,
+          message: "Your restaurant has been suspended. Please contact FlowUp support.",
+          suspended: true,
+        });
+      }
     }
 
     // Generate JWT

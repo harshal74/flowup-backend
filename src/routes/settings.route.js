@@ -1,4 +1,5 @@
 const express = require("express");
+const resolvePublicRestaurant = require("../middleware/resolvePublicRestaurant");
 
 const {
   getSettings,
@@ -13,10 +14,10 @@ const protect = require("../middleware/auth.middleware");
 
 const router = express.Router();
 
-// GET /settings is intentionally public — user frontend needs shopOpen, restaurantName,
-// deliveryCharge etc. to render the menu. Sensitive admin-only fields (upiId etc.)
-// are only set via the protected PUT endpoint.
-router.get("/", getSettings);
+// GET /settings — public: uses resolvePublicRestaurant OR admin's JWT restaurantId
+// The resolver handles ?restaurantId= for customer frontend.
+// Admin frontend hits this without query param but with JWT — protect handles that separately.
+router.get("/", resolvePublicRestaurant, getSettings);
 
 router.put("/", protect, updateSettings);
 

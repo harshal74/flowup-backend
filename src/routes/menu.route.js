@@ -1,4 +1,5 @@
 const express = require("express");
+const resolvePublicRestaurant = require("../middleware/resolvePublicRestaurant");
 
 const {
   createMenu,
@@ -20,14 +21,16 @@ router.post("/", protect, createMenu);
 
 router.get("/admin", protect, getAdminMenus);   // MUST be before /:id
 
-router.get("/", getPublicMenus);
+router.get("/", resolvePublicRestaurant, getPublicMenus);
 
-router.get("/:id", getMenuById);
-
+// /category/:categoryId MUST be before /:id so Express doesn't match "category" as an id
 router.get(
   "/category/:categoryId",
+  resolvePublicRestaurant,
   getMenusByCategory
 );
+
+router.get("/:id", resolvePublicRestaurant, getMenuById);
 
 router.put("/:id", protect, updateMenu);
 

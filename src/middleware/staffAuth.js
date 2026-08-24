@@ -1,5 +1,6 @@
-const jwt   = require("jsonwebtoken");
-const Staff = require("../models/Staff");
+const jwt     = require("jsonwebtoken");
+const Staff   = require("../models/Staff");
+const Setting = require("../models/Setting");
 
 /**
  * Core: try to authenticate a staff JWT.
@@ -71,6 +72,19 @@ const staffAuth = async (req, res, next) => {
     });
   }
 
+  // Check restaurant suspension
+  const restaurantSettings = await Setting.findOne({ restaurantId: staff.restaurantId })
+    .select("accountStatus")
+    .lean();
+
+  if (restaurantSettings?.accountStatus === "SUSPENDED") {
+    return res.status(403).json({
+      success: false,
+      message: "Your restaurant has been suspended. Please contact FlowUp support.",
+      suspended: true,
+    });
+  }
+
   req.staff = staff;
   next();
 };
@@ -87,7 +101,14 @@ const tryStaffAuthMiddleware = async (req, res, next) => {
   if (staff) {
     const effectiveStatus = staff.status || (staff.isActive !== false ? "ACTIVE" : "BLOCKED");
     if (effectiveStatus === "ACTIVE" && staff.isActive !== false) {
-      req.staff = staff;
+      // Check restaurant suspension before granting staff access
+      const restaurantSettings = await Setting.findOne({ restaurantId: staff.restaurantId })
+        .select("accountStatus")
+        .lean();
+
+      if (restaurantSettings?.accountStatus !== "SUSPENDED") {
+        req.staff = staff;
+      }
     }
   }
   // Always call next() — let adminOrStaff check req.staff

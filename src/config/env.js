@@ -12,10 +12,6 @@ module.exports = {
   mongoUri:     process.env.MONGO_URI,
   jwtSecret:    process.env.JWT_SECRET,
 
-  // Single-tenant deployment: the restaurant served by this backend instance.
-  // For multi-tenant, each restaurant's ID comes from auth context (req.user.restaurantId).
-  restaurantId: process.env.RESTAURANT_ID,
-
   // CORS origins for each frontend (production values set on Render)
   adminOrigin:    process.env.ADMIN_ORIGIN,
   customerOrigin: process.env.CUSTOMER_ORIGIN,

@@ -1,5 +1,6 @@
 const express = require("express");
 const { rateLimit } = require("../middleware/rateLimit");
+const resolvePublicRestaurant = require("../middleware/resolvePublicRestaurant");
 
 const {
   createOrder,
@@ -109,7 +110,7 @@ router.get("/geocode/reverse", async (req, res) => {
   }
 });
 
-router.post("/", orderIpLimiter, orderLimiter, createOrder);
+router.post("/", orderIpLimiter, orderLimiter, resolvePublicRestaurant, createOrder);
 
 router.get("/", protect, getOrders);
 

@@ -1,6 +1,7 @@
 const bcrypt = require("bcryptjs");
 const jwt    = require("jsonwebtoken");
 const Staff  = require("../models/Staff");
+const Setting = require("../models/Setting");
 const { logActivity } = require("../services/staffActivityService");
 
 const EMAIL_RE  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -49,6 +50,13 @@ exports.signup = async (req, res) => {
       });
     }
 
+    // ── Validate restaurant exists ────────────────────────────
+    const trimmedRestaurantId = restaurantId.trim();
+    const restaurant = await Setting.findOne({ restaurantId: trimmedRestaurantId });
+    if (!restaurant) {
+      return res.status(404).json({ success: false, message: "Restaurant not found. Please use a valid signup link." });
+    }
+
     const normEmail = email.toLowerCase().trim();
 
     // ── Duplicate check ───────────────────────────────────────
@@ -68,13 +76,18 @@ exports.signup = async (req, res) => {
         return res.status(409).json({ success: false, message: "An account with this email already exists and is blocked." });
       }
       if (existing.status === "REJECTED") {
-        // Allow re-registration after rejection — update the existing record
+        // Allow re-registration after rejection — but ONLY for the same restaurant.
+        // A rejected Staff record must never be moved to a different restaurant.
+        if (existing.restaurantId !== restaurantId.trim()) {
+          return res.status(409).json({ success: false, message: "An account with this email already exists." });
+        }
+
         const hashed = await bcrypt.hash(password, 10);
         existing.name = name.trim();
         existing.mobile = mobile.trim().replace(/\s/g, "");
         existing.password = hashed;
         existing.role = role;
-        existing.restaurantId = restaurantId.trim();
+        // restaurantId intentionally NOT changed — remains the original restaurant
         existing.status = "PENDING";
         existing.isActive = false;
         existing.isEmailVerified = false;
@@ -173,6 +186,19 @@ exports.login = async (req, res) => {
     const isMatch = await bcrypt.compare(password, staff.password);
     if (!isMatch) {
       return res.status(401).json({ success: false, message: "Invalid email or password" });
+    }
+
+    // ── Check restaurant suspension ───────────────────────────
+    const restaurantSettings = await Setting.findOne({ restaurantId: staff.restaurantId })
+      .select("accountStatus")
+      .lean();
+
+    if (restaurantSettings?.accountStatus === "SUSPENDED") {
+      return res.status(403).json({
+        success: false,
+        message: "This restaurant is currently suspended.",
+        suspended: true,
+      });
     }
 
     const token = jwt.sign(

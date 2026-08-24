@@ -95,6 +95,9 @@ const billSchema = new mongoose.Schema(
   }
 );
 
+// Compound index for bill history pagination (sorted listing per restaurant)
+billSchema.index({ restaurantId: 1, createdAt: -1 });
+
 
 module.exports =
   mongoose.models.Bill ||

@@ -4,7 +4,6 @@ const Category = require("../models/Category");
 const Customer = require("../models/Customer");
 const Setting  = require("../models/Setting");
 const { emitToRestaurant } = require("../socket");
-const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
 const { validateDeliveryLocation } = require("../utils/validateLocation");
 
 // ─────────────────────────────────────────────────────────────────
@@ -14,7 +13,11 @@ const createOrder = async (req, res) => {
   try {
     const { orderType, tableNumber, customer, items, note, address, deliveryLocation } = req.body;
 
-    const restaurantId = DEFAULT_RESTAURANT_ID;
+    // Use validated restaurantId from resolvePublicRestaurant middleware
+    const restaurantId = req.restaurantId;
+    if (!restaurantId) {
+      return res.status(400).json({ success: false, message: "Restaurant context is required." });
+    }
 
     // ── Shop open/closed check ─────────────────────────────────
     const settings = await Setting.findOne({ restaurantId });
@@ -220,9 +223,9 @@ const createOrder = async (req, res) => {
     // The unique index blocked the second insert. Return the first order.
     if (error.code === 11000 && error.keyPattern?.idempotencyKey) {
       const key = (typeof req.body.idempotencyKey === "string") ? req.body.idempotencyKey.trim() : null;
-      if (key) {
+      if (key && req.restaurantId) {
         const existing = await Order.findOne({
-          restaurantId: DEFAULT_RESTAURANT_ID,
+          restaurantId: req.restaurantId,
           idempotencyKey: key,
         }).populate("customerId", "name mobile address");
         if (existing) {

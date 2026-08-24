@@ -19,7 +19,6 @@ const Category      = require("../models/Category");
 const Customer      = require("../models/Customer");
 const Setting       = require("../models/Setting");
 const { emitToRestaurant } = require("../socket");
-const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
 const { validateDeliveryLocation } = require("../utils/validateLocation");
 
 const INTENT_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes
@@ -126,7 +125,10 @@ exports.createPaymentOrder = async (req, res) => {
       return res.status(503).json({ success: false, message: "Online payment is not configured." });
     }
 
-    const restaurantId = DEFAULT_RESTAURANT_ID;
+    const restaurantId = req.restaurantId;
+    if (!restaurantId) {
+      return res.status(400).json({ success: false, message: "Restaurant context is required." });
+    }
     const { orderType, customer, items, note, address, deliveryLocation, idempotencyKey } = req.body;
 
     // ── Validate request ──────────────────────────────────────
@@ -478,7 +480,10 @@ exports.razorpayWebhook = async (req, res) => {
 // ══════════════════════════════════════════════════════════════════
 exports.getPaymentConfig = async (req, res) => {
   try {
-    const restaurantId = req.query.restaurantId || DEFAULT_RESTAURANT_ID;
+    const restaurantId = req.restaurantId;
+    if (!restaurantId) {
+      return res.status(400).json({ success: false, message: "restaurantId is required." });
+    }
     const settings = await Setting.findOne({ restaurantId }).select("deliveryPaymentMode");
     const keyId = process.env.RAZORPAY_KEY_ID || "";
     const mode = settings?.deliveryPaymentMode || "COD";

@@ -75,18 +75,33 @@ async function transitionOrder(req, res, { fromStatus, toStatus, staffField, act
 }
 
 // ── GET /api/staff/orders ─────────────────────────────────────────
-// Returns all orders for the restaurant (all statuses — frontend filters)
+// Returns orders for the restaurant (paginated, with optional status filter)
 exports.getOrders = async (req, res) => {
   try {
     const restaurantId = req.staff.restaurantId;
+    const { status, page = 1, limit = 50 } = req.query;
 
-    const orders = await Order.find({ restaurantId })
+    const effectiveLimit = Math.min(Number(limit) || 50, 100);
+    const effectivePage  = Math.max(Number(page) || 1, 1);
+    const skip = (effectivePage - 1) * effectiveLimit;
+
+    const filter = { restaurantId };
+    if (status) filter.status = status;
+
+    const total = await Order.countDocuments(filter);
+
+    const orders = await Order.find(filter)
       .populate("customerId", "name mobile address")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(effectiveLimit);
 
     return res.status(200).json({
       success: true,
       count:   orders.length,
+      total,
+      page:    effectivePage,
+      limit:   effectiveLimit,
       data:    orders,
     });
   } catch (error) {

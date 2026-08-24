@@ -1,5 +1,6 @@
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
+const Setting = require("./models/Setting");
 
 let io = null;
 
@@ -14,6 +15,7 @@ function initSocket(httpServer, allowedOrigins) {
     "http://localhost:5174",
     "http://localhost:5175",
     "http://localhost:5176",  // waiter frontend dev port
+    "http://localhost:5177",  // platform frontend dev port
     "http://localhost:3000",
   ].filter(Boolean);
 
@@ -32,7 +34,7 @@ function initSocket(httpServer, allowedOrigins) {
     },
   });
 
-  io.on("connection", (socket) => {
+  io.on("connection", async (socket) => {
     const restaurantId = socket.handshake.query.restaurantId;
 
     if (!restaurantId) {
@@ -42,9 +44,6 @@ function initSocket(httpServer, allowedOrigins) {
     }
 
     // ── Authentication check ─────────────────────────────────────
-    // Only authenticated admin/staff can join restaurant rooms.
-    // Customer frontend does not use socket connections (order tracking
-    // is done via REST polling or the success page is static).
     const token = socket.handshake.auth?.token || socket.handshake.query?.token;
 
     if (!token) {
@@ -66,6 +65,25 @@ function initSocket(httpServer, allowedOrigins) {
       socket.emit("error", { message: "Invalid or expired token" });
       socket.disconnect(true);
       return;
+    }
+
+    // ── Restaurant suspension check ──────────────────────────────
+    // Block connections to suspended restaurants.
+    // PLATFORM restaurantId is exempt (SUPER_ADMIN identity).
+    if (restaurantId !== "PLATFORM") {
+      try {
+        const settings = await Setting.findOne({ restaurantId })
+          .select("accountStatus")
+          .lean();
+
+        if (settings?.accountStatus === "SUSPENDED") {
+          socket.emit("error", { message: "Restaurant is suspended" });
+          socket.disconnect(true);
+          return;
+        }
+      } catch {
+        // DB error — allow connection (fail-open for real-time, REST enforces on each request)
+      }
     }
 
     socket.join(restaurantId);
@@ -90,4 +108,22 @@ function emitToRestaurant(restaurantId, eventName, payload) {
   io.to(restaurantId).emit(eventName, payload);
 }
 
-module.exports = { initSocket, emitToRestaurant };
+/**
+ * Disconnect all sockets in a restaurant's room.
+ * Called when SUPER_ADMIN suspends a restaurant.
+ */
+async function disconnectRestaurant(restaurantId) {
+  if (!io) return;
+
+  const sockets = await io.in(restaurantId).fetchSockets();
+  for (const s of sockets) {
+    s.emit("restaurant_suspended", { message: "Your restaurant has been suspended." });
+    s.disconnect(true);
+  }
+
+  if (sockets.length > 0) {
+    console.log(`[Socket] Disconnected ${sockets.length} socket(s) for suspended restaurant: ${restaurantId}`);
+  }
+}
+
+module.exports = { initSocket, emitToRestaurant, disconnectRestaurant };

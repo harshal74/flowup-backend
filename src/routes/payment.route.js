@@ -1,6 +1,7 @@
 const express = require("express");
 const { rateLimit } = require("../middleware/rateLimit");
 const protect = require("../middleware/auth.middleware");
+const resolvePublicRestaurant = require("../middleware/resolvePublicRestaurant");
 const {
   createPaymentOrder,
   verifyAndCreateOrder,
@@ -19,10 +20,10 @@ const paymentLimiter = rateLimit({
 });
 
 // Public — customer frontend fetches payment config (mode + public key)
-router.get("/config", getPaymentConfig);
+router.get("/config", resolvePublicRestaurant, getPaymentConfig);
 
 // Public — customer creates a Razorpay order before paying
-router.post("/create-order", paymentLimiter, createPaymentOrder);
+router.post("/create-order", paymentLimiter, resolvePublicRestaurant, createPaymentOrder);
 
 // Public — customer sends payment proof, backend verifies + creates FlowUp order
 router.post("/verify-and-create-order", paymentLimiter, verifyAndCreateOrder);

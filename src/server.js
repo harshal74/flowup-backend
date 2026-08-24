@@ -1,7 +1,7 @@
 require("dotenv").config();
 
 // ── Fail-fast: required environment variables ─────────────────────
-const REQUIRED_ENV = ["MONGO_URI", "JWT_SECRET", "RESTAURANT_ID"];
+const REQUIRED_ENV = ["MONGO_URI", "JWT_SECRET"];
 const missing = REQUIRED_ENV.filter(k => !process.env[k]);
 if (missing.length > 0) {
   console.error(`\n❌ FATAL: Missing required environment variables:\n   ${missing.join("\n   ")}\n`);

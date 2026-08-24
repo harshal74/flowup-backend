@@ -121,6 +121,45 @@ const settingSchema = new mongoose.Schema(
       enum: ["COD", "PAYMENT_FIRST", "BOTH"],
       default: "COD",
     },
+
+    // Public URL slug (e.g., "abc-cafe" → /restaurant/abc-cafe)
+    // Managed exclusively by SUPER_ADMIN. Not changeable by restaurant Admin.
+    restaurantSlug: {
+      type: String,
+      unique: true,
+      sparse: true,
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
+
+    // Platform account status (managed by SUPER_ADMIN only)
+    // ACTIVE = restaurant operates normally
+    // SUSPENDED = all operations blocked for this restaurant
+    accountStatus: {
+      type: String,
+      enum: ["ACTIVE", "SUSPENDED"],
+      default: "ACTIVE",
+      index: true,
+    },
+
+    suspendedAt: {
+      type: Date,
+      default: null,
+    },
+
+    suspendedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Admin",
+      default: null,
+    },
+
+    suspensionReason: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: 500,
+    },
   },
   {
     timestamps: true,

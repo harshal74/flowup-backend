@@ -1,45 +1,26 @@
 const Setting = require("../models/Setting");
 const Order   = require("../models/Order");
-const { restaurantId: DEFAULT_RESTAURANT_ID } = require("../config/env");
 
 // Get Settings
 const getSettings = async (req, res) => {
   try {
-    // Accept restaurantId from query param (customer frontend) or req.user (admin)
-    const restaurantId =
-      req.user?.restaurantId ||
-      req.query.restaurantId ||
-      DEFAULT_RESTAURANT_ID;
+    // Use resolved public restaurantId (from middleware) or admin's restaurantId
+    const restaurantId = req.restaurantId || req.user?.restaurantId;
 
-    const settings =
-      await Setting.findOne({
-        restaurantId,
-      });
-
-
-    if (!settings) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "Settings not found",
-      });
+    if (!restaurantId) {
+      return res.status(400).json({ success: false, message: "restaurantId is required" });
     }
 
-    return res.status(200).json({
-      success: true,
-      data: settings,
-    });
-  } catch (error) {
-    console.error(
-      "Get Settings Error:",
-      error
-    );
+    const settings = await Setting.findOne({ restaurantId });
 
-    return res.status(500).json({
-      success: false,
-      message:
-        "Internal server error",
-    });
+    if (!settings) {
+      return res.status(404).json({ success: false, message: "Settings not found" });
+    }
+
+    return res.status(200).json({ success: true, data: settings });
+  } catch (error) {
+    console.error("Get Settings Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
@@ -86,6 +67,14 @@ const updateSettings = async (req, res) => {
       // Store as integer
       req.body.totalTables = newTotal;
     }
+
+    // Never allow Admin to change restaurantSlug through settings update
+    // (only SUPER_ADMIN can change slug via platform API)
+    delete req.body.restaurantSlug;
+    delete req.body.accountStatus;
+    delete req.body.suspendedAt;
+    delete req.body.suspendedBy;
+    delete req.body.suspensionReason;
 
     const settings = await Setting.findOneAndUpdate(
       { restaurantId },
