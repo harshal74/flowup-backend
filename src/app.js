@@ -28,6 +28,7 @@ const ALLOWED_ORIGINS = [
   process.env.ADMIN_ORIGIN,
   process.env.CUSTOMER_ORIGIN,
   process.env.WAITER_ORIGIN,
+  process.env.PLATFORM_ORIGIN,
   // Development
   "http://localhost:5173",
   "http://localhost:5174",
