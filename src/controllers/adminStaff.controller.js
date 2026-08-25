@@ -34,11 +34,15 @@ exports.getStaff = async (req, res) => {
 
     // Status filter — default shows active/blocked + legacy accounts
     if (status === "active") {
+      // "Active" means: explicitly ACTIVE, or a legacy account (no/null status)
+      // that has not been deactivated. Kept in sync with the `active` summary count
+      // (legacyActiveFilter) so the list and the count always agree.
+      conditions.push({ isActive: { $ne: false } });
       conditions.push({
         $or: [
           { status: "ACTIVE" },
-          { status: { $exists: false }, isActive: { $ne: false } },
-          { status: null, isActive: { $ne: false } },
+          { status: { $exists: false } },
+          { status: null },
         ],
       });
     } else if (status === "blocked") {

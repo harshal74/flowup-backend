@@ -35,15 +35,13 @@ function initSocket(httpServer, allowedOrigins) {
   });
 
   io.on("connection", async (socket) => {
-    const restaurantId = socket.handshake.query.restaurantId;
-
-    if (!restaurantId) {
-      socket.emit("error", { message: "restaurantId is required" });
-      socket.disconnect(true);
-      return;
-    }
-
     // ── Authentication check ─────────────────────────────────────
+    // SECURITY: The room a socket joins is derived ONLY from the verified
+    // JWT — never from the client-supplied query param. The query param is
+    // treated as an untrusted hint and must match the token, but it is never
+    // used as the room key. This makes it impossible for a client to join
+    // another restaurant's room by manipulating the query string, and it
+    // fails CLOSED if the token lacks a restaurantId claim.
     const token = socket.handshake.auth?.token || socket.handshake.query?.token;
 
     if (!token) {
@@ -52,15 +50,28 @@ function initSocket(httpServer, allowedOrigins) {
       return;
     }
 
+    let restaurantId;
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const tokenRestaurantId = decoded.restaurantId;
-      // Verify the token's restaurant matches the requested room
-      if (tokenRestaurantId && tokenRestaurantId !== restaurantId) {
+
+      // Fail closed: a token with no restaurantId claim cannot join any room.
+      if (!tokenRestaurantId) {
+        socket.emit("error", { message: "Token missing restaurant context" });
+        socket.disconnect(true);
+        return;
+      }
+
+      // If the client sent a restaurantId hint, it MUST match the token.
+      const requestedRestaurantId = socket.handshake.query.restaurantId;
+      if (requestedRestaurantId && requestedRestaurantId !== tokenRestaurantId) {
         socket.emit("error", { message: "Restaurant mismatch" });
         socket.disconnect(true);
         return;
       }
+
+      // The room is the TRUSTED value from the token, not the query param.
+      restaurantId = tokenRestaurantId;
     } catch {
       socket.emit("error", { message: "Invalid or expired token" });
       socket.disconnect(true);
