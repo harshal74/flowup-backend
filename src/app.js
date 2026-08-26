@@ -14,7 +14,9 @@ const staffRoutes   = require("./routes/staffRoutes");
 const adminStaffRoutes = require("./routes/adminStaff.route");
 const paymentRoutes = require("./routes/payment.route");
 const platformRoutes = require("./routes/platform.route");
-const contactRoutes = require("./routes/contact.route");
+const contactRoutes          = require("./routes/contact.route");
+const deliveryEnquiryRoutes  = require("./routes/deliveryEnquiry.route");
+const leadsRoutes            = require("./routes/leads.route");
 
 const app = express();
 
@@ -30,11 +32,8 @@ const ALLOWED_ORIGINS = [
   process.env.CUSTOMER_ORIGIN,
   process.env.WAITER_ORIGIN,
   process.env.PLATFORM_ORIGIN,
-<<<<<<< HEAD
-  "https://flowup.co.in",
-=======
-  process.env.LANDING_ORIGIN,   // marketing landing page (flowup.co.in)
->>>>>>> dc4151c (added landing page routes)
+  process.env.LANDING_ORIGIN,   // marketing landing page — set to https://flowup.co.in in prod
+  "https://flowup.co.in",       // hardcoded fallback (safe — it's a public domain, not a secret)
   // Development
   "http://localhost:5173",
   "http://localhost:5174",
@@ -94,7 +93,9 @@ app.use("/api/staff",   staffRoutes);
 app.use("/api/admin/staff", adminStaffRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/platform", platformRoutes);
-app.use("/api/contact", contactRoutes);
+app.use("/api/contact",              contactRoutes);
+app.use("/api/delivery-enquiries",   deliveryEnquiryRoutes);
+app.use("/api/leads",                leadsRoutes);
 
 // ── 404 handler for unknown API routes ────────────────────────────
 app.use("/api/{*path}", (req, res) => {
