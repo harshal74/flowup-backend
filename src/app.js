@@ -14,6 +14,7 @@ const staffRoutes   = require("./routes/staffRoutes");
 const adminStaffRoutes = require("./routes/adminStaff.route");
 const paymentRoutes = require("./routes/payment.route");
 const platformRoutes = require("./routes/platform.route");
+const contactRoutes = require("./routes/contact.route");
 
 const app = express();
 
@@ -29,7 +30,11 @@ const ALLOWED_ORIGINS = [
   process.env.CUSTOMER_ORIGIN,
   process.env.WAITER_ORIGIN,
   process.env.PLATFORM_ORIGIN,
+<<<<<<< HEAD
   "https://flowup.co.in",
+=======
+  process.env.LANDING_ORIGIN,   // marketing landing page (flowup.co.in)
+>>>>>>> dc4151c (added landing page routes)
   // Development
   "http://localhost:5173",
   "http://localhost:5174",
@@ -37,6 +42,7 @@ const ALLOWED_ORIGINS = [
   "http://localhost:5176",   // waiter frontend
   "http://localhost:3000",
   "http://localhost:5177",
+  "http://localhost:5178",   // landing page dev
 ].filter(Boolean);
 
 // Global Middleware
@@ -88,6 +94,7 @@ app.use("/api/staff",   staffRoutes);
 app.use("/api/admin/staff", adminStaffRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/platform", platformRoutes);
+app.use("/api/contact", contactRoutes);
 
 // ── 404 handler for unknown API routes ────────────────────────────
 app.use("/api/{*path}", (req, res) => {

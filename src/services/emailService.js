@@ -130,6 +130,67 @@ async function sendOtpEmail({ to, name, otp }) {
   }
 }
 
+// ── sendEnquiryEmail ──────────────────────────────────────────────
+/**
+ * Send a "Contact / Get in Touch" enquiry from the marketing landing page
+ * to the FlowUp sales inbox.
+ *
+ * Recipient defaults to CONTACT_RECIPIENT_EMAIL (falls back to EMAIL_USER).
+ * Sets replyTo to the enquirer's email so replies go straight to them.
+ *
+ * Returns { messageId } on success. THROWS on any failure so the caller
+ * can report accurate status to the frontend.
+ */
+async function sendEnquiryEmail({ name, restaurant, phone, email, city, message }) {
+  const transporter = createTransporter();
+
+  if (!transporter) {
+    const err = new Error("SMTP not configured. EMAIL_USER and EMAIL_PASS must be set in .env");
+    err.code = "SMTP_NOT_CONFIGURED";
+    throw err;
+  }
+
+  const to   = process.env.CONTACT_RECIPIENT_EMAIL || process.env.EMAIL_USER;
+  const from = process.env.EMAIL_FROM || `"FlowUp Website" <${process.env.EMAIL_USER}>`;
+
+  const safe = (v) => String(v || "").trim() || "—";
+
+  const info = await transporter.sendMail({
+    from,
+    to,
+    replyTo: email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined,
+    subject: `New FlowUp Enquiry — ${safe(restaurant)} (${safe(name)})`,
+    text:
+      `New FlowUp Enquiry\n\n` +
+      `Name: ${safe(name)}\n` +
+      `Restaurant: ${safe(restaurant)}\n` +
+      `Phone: ${safe(phone)}\n` +
+      `Email: ${safe(email)}\n` +
+      `City: ${safe(city)}\n\n` +
+      `Message:\n${safe(message)}\n`,
+    html: `
+      <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;background:#0b1220;border-radius:16px;color:#f9fafb">
+        <h2 style="margin:0 0 16px;color:#f97316;font-size:20px">New FlowUp Enquiry</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;color:#e5e7eb">
+          <tr><td style="padding:6px 0;color:#9ca3af;width:120px">Name</td><td style="padding:6px 0"><strong>${safe(name)}</strong></td></tr>
+          <tr><td style="padding:6px 0;color:#9ca3af">Restaurant</td><td style="padding:6px 0"><strong>${safe(restaurant)}</strong></td></tr>
+          <tr><td style="padding:6px 0;color:#9ca3af">Phone</td><td style="padding:6px 0">${safe(phone)}</td></tr>
+          <tr><td style="padding:6px 0;color:#9ca3af">Email</td><td style="padding:6px 0">${safe(email)}</td></tr>
+          <tr><td style="padding:6px 0;color:#9ca3af">City</td><td style="padding:6px 0">${safe(city)}</td></tr>
+        </table>
+        <div style="margin-top:16px;padding:16px;background:#111827;border-radius:12px;border:1px solid #1f2937">
+          <p style="margin:0 0 6px;color:#9ca3af;font-size:12px">Message</p>
+          <p style="margin:0;white-space:pre-wrap;color:#f9fafb">${safe(message)}</p>
+        </div>
+        <p style="color:#6b7280;font-size:12px;margin-top:20px">Sent from the FlowUp landing page contact form.</p>
+      </div>
+    `,
+  });
+
+  console.log(`[Email] ✓ Enquiry email sent to ${to} — MessageId: ${info.messageId}`);
+  return { messageId: info.messageId };
+}
+
 // ── SMTP health check (used by /api/staff/test-email and server startup) ──
 async function testSmtpConnection() {
   const transporter = createTransporter();
@@ -149,4 +210,4 @@ async function testSmtpConnection() {
   }
 }
 
-module.exports = { generateOtp, sendOtpEmail, testSmtpConnection };
+module.exports = { generateOtp, sendOtpEmail, sendEnquiryEmail, testSmtpConnection };
