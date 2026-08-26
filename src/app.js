@@ -17,6 +17,7 @@ const platformRoutes = require("./routes/platform.route");
 const contactRoutes          = require("./routes/contact.route");
 const deliveryEnquiryRoutes  = require("./routes/deliveryEnquiry.route");
 const leadsRoutes            = require("./routes/leads.route");
+const restaurantsRoutes      = require("./routes/restaurants.route");
 
 const app = express();
 
@@ -96,6 +97,7 @@ app.use("/api/platform", platformRoutes);
 app.use("/api/contact",              contactRoutes);
 app.use("/api/delivery-enquiries",   deliveryEnquiryRoutes);
 app.use("/api/leads",                leadsRoutes);
+app.use("/api/restaurants",          restaurantsRoutes);
 
 // ── 404 handler for unknown API routes ────────────────────────────
 app.use("/api/{*path}", (req, res) => {
