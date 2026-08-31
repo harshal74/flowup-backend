@@ -78,13 +78,13 @@ function initSocket(httpServer, allowedOrigins) {
       return;
     }
 
-    // ── Restaurant suspension check ──────────────────────────────
-    // Block connections to suspended restaurants.
+    // ── Restaurant suspension and expiry check ───────────────────
+    // Block connections to suspended or expired restaurants.
     // PLATFORM restaurantId is exempt (SUPER_ADMIN identity).
     if (restaurantId !== "PLATFORM") {
       try {
         const settings = await Setting.findOne({ restaurantId })
-          .select("accountStatus")
+          .select("accountStatus expiresAt")
           .lean();
 
         if (settings?.accountStatus === "SUSPENDED") {
@@ -92,8 +92,17 @@ function initSocket(httpServer, allowedOrigins) {
           socket.disconnect(true);
           return;
         }
+
+        // Expiry check: prevent new socket joins for expired restaurants.
+        // Already-connected sockets remain until they disconnect naturally — this
+        // is acceptable since REST calls will reject any API request anyway.
+        if (settings?.expiresAt && new Date() >= new Date(settings.expiresAt)) {
+          socket.emit("error", { message: "Restaurant subscription has expired" });
+          socket.disconnect(true);
+          return;
+        }
       } catch {
-        // DB error — allow connection (fail-open for real-time, REST enforces on each request)
+        // DB error — allow connection (fail-open for real-time; REST enforces on each request)
       }
     }
 

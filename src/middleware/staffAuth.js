@@ -72,9 +72,9 @@ const staffAuth = async (req, res, next) => {
     });
   }
 
-  // Check restaurant suspension
+  // Check restaurant suspension and expiry
   const restaurantSettings = await Setting.findOne({ restaurantId: staff.restaurantId })
-    .select("accountStatus")
+    .select("accountStatus expiresAt")
     .lean();
 
   if (restaurantSettings?.accountStatus === "SUSPENDED") {
@@ -82,6 +82,15 @@ const staffAuth = async (req, res, next) => {
       success: false,
       message: "Your restaurant has been suspended. Please contact FlowUp support.",
       suspended: true,
+    });
+  }
+
+  // Expiry check: block if current time >= expiresAt
+  if (restaurantSettings?.expiresAt && new Date() >= new Date(restaurantSettings.expiresAt)) {
+    return res.status(403).json({
+      success: false,
+      message: "Your restaurant subscription has expired. Please contact FlowUp support.",
+      expired: true,
     });
   }
 
@@ -101,12 +110,17 @@ const tryStaffAuthMiddleware = async (req, res, next) => {
   if (staff) {
     const effectiveStatus = staff.status || (staff.isActive !== false ? "ACTIVE" : "BLOCKED");
     if (effectiveStatus === "ACTIVE" && staff.isActive !== false) {
-      // Check restaurant suspension before granting staff access
+      // Check restaurant suspension and expiry before granting staff access
       const restaurantSettings = await Setting.findOne({ restaurantId: staff.restaurantId })
-        .select("accountStatus")
+        .select("accountStatus expiresAt")
         .lean();
 
-      if (restaurantSettings?.accountStatus !== "SUSPENDED") {
+      const isActive   = restaurantSettings?.accountStatus !== "SUSPENDED";
+      const isExpired  = restaurantSettings?.expiresAt
+        ? new Date() >= new Date(restaurantSettings.expiresAt)
+        : false;
+
+      if (isActive && !isExpired) {
         req.staff = staff;
       }
     }

@@ -29,13 +29,28 @@ const billSchema = new mongoose.Schema(
                 ref: "Menu",
             },
 
-            name: String,
+            name: {
+                type: String,
+                default: "",
+            },
 
-            quantity: Number,
+            quantity: {
+                type: Number,
+                default: 0,
+                min: 0,
+            },
 
-            price: Number,
+            price: {
+                type: Number,
+                default: 0,
+                min: 0,
+            },
 
-            total: Number,
+            total: {
+                type: Number,
+                default: 0,
+                min: 0,
+            },
         }
     ],
 
@@ -46,6 +61,19 @@ const billSchema = new mongoose.Schema(
     },
 
     gst: {
+      type: Number,
+      default: 0,
+    },
+
+    // SGST + CGST (stored separately for receipt display).
+    // For new bills: sgst + cgst = gst.
+    // Legacy bills: sgst and cgst will be 0 (field missing), gst holds total GST.
+    sgst: {
+      type: Number,
+      default: 0,
+    },
+
+    cgst: {
       type: Number,
       default: 0,
     },

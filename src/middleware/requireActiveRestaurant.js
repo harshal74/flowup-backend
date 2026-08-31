@@ -22,7 +22,7 @@ const requireActiveRestaurant = async (req, res, next) => {
     }
 
     const settings = await Setting.findOne({ restaurantId })
-      .select("accountStatus")
+      .select("accountStatus expiresAt")
       .lean();
 
     if (!settings) {
@@ -34,6 +34,15 @@ const requireActiveRestaurant = async (req, res, next) => {
         success: false,
         message: "This restaurant has been suspended. Please contact FlowUp support.",
         suspended: true,
+      });
+    }
+
+    // Expiry check: independent of accountStatus — treated as a separate condition
+    if (settings.expiresAt && new Date() >= new Date(settings.expiresAt)) {
+      return res.status(403).json({
+        success: false,
+        message: "This restaurant's subscription has expired. Please contact FlowUp support.",
+        expired: true,
       });
     }
 

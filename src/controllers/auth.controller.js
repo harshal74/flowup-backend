@@ -2,6 +2,10 @@ const bcrypt = require("bcryptjs");
 const Admin = require("../models/Admin");
 const Setting = require("../models/Setting");
 const { generateToken } = require("../utils/jwt");
+const {
+  recordAdminLogin,
+  recordAdminLoginFailed,
+} = require("../services/loginActivityService");
 
 // Login Admin
 const login = async (req, res) => {
@@ -22,6 +26,8 @@ const login = async (req, res) => {
     }).select("+password");
 
     if (!admin) {
+      // Account not found — record as failed, safe reason
+      recordAdminLoginFailed(email, "Invalid credentials", null, null, null, req);
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",
@@ -30,6 +36,7 @@ const login = async (req, res) => {
 
     // Check Active Status
     if (!admin.isActive) {
+      recordAdminLoginFailed(email, "Account suspended", admin.role, admin.restaurantId, admin.restaurantName, req);
       return res.status(403).json({
         success: false,
         message: "Account is disabled",
@@ -37,30 +44,37 @@ const login = async (req, res) => {
     }
 
     // Compare Password
-    const isMatch = await bcrypt.compare(
-      password,
-      admin.password
-    );
-
+    const isMatch = await bcrypt.compare(password, admin.password);
 
     if (!isMatch) {
+      recordAdminLoginFailed(email, "Invalid credentials", admin.role, admin.restaurantId, admin.restaurantName, req);
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",
       });
     }
 
-    // Check restaurant suspension (SUPER_ADMIN bypasses)
+    // Check restaurant suspension and expiry (SUPER_ADMIN bypasses)
     if (admin.role !== "SUPER_ADMIN") {
       const settings = await Setting.findOne({ restaurantId: admin.restaurantId })
-        .select("accountStatus")
+        .select("accountStatus expiresAt restaurantName")
         .lean();
 
       if (settings?.accountStatus === "SUSPENDED") {
+        recordAdminLoginFailed(email, "Restaurant suspended", admin.role, admin.restaurantId, settings?.restaurantName || admin.restaurantName, req);
         return res.status(403).json({
           success: false,
           message: "Your restaurant has been suspended. Please contact FlowUp support.",
           suspended: true,
+        });
+      }
+
+      if (settings?.expiresAt && new Date() >= new Date(settings.expiresAt)) {
+        recordAdminLoginFailed(email, "Restaurant expired", admin.role, admin.restaurantId, settings?.restaurantName || admin.restaurantName, req);
+        return res.status(403).json({
+          success: false,
+          message: "Your restaurant subscription has expired. Please contact FlowUp support.",
+          expired: true,
         });
       }
     }
@@ -76,6 +90,9 @@ const login = async (req, res) => {
     // Update Last Login
     admin.lastLogin = new Date();
     await admin.save();
+
+    // Record successful login — fire-and-forget
+    recordAdminLogin(admin, req, admin.restaurantName || null);
 
     return res.status(200).json({
       success: true,

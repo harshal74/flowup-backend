@@ -15,7 +15,14 @@ const createCategory = async (req, res) => {
       return res.status(400).json({ success: false, message: "Category name is required" });
     }
 
-    const existingCategory = await Category.findOne({ restaurantId, name: name.trim() });
+    // FIX M4: Case-insensitive duplicate check (anchored, with regex escaping).
+    // "Burgers", "burgers", and "BURGERS" are treated as the same category
+    // within the same restaurant — consistent with the menu duplicate check.
+    const safeName = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const existingCategory = await Category.findOne({
+      restaurantId,
+      name: { $regex: `^${safeName}$`, $options: "i" },
+    });
     if (existingCategory) {
       return res.status(409).json({ success: false, message: "Category already exists" });
     }

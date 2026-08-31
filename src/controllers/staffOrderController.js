@@ -168,7 +168,7 @@ exports.deliverOrder = async (req, res) => {
     fromStatus: allowedFrom,
     toStatus:   "COMPLETED",
     staffField: "servedBy",
-    action:     order.orderType === "DELIVERY" ? "Completed Delivery" : "Delivered Order",
+    action:     order.orderType === "DELIVERY" ? "Completed Delivery" : order.orderType === "TAKE_AWAY" ? "Completed Take Away" : "Delivered Order",
   });
 };
 

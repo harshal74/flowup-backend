@@ -32,6 +32,9 @@ router.patch("/:id/reject",          ctrl.rejectStaff);
 router.patch("/:id/block",           ctrl.blockStaff);
 router.patch("/:id/unblock",         ctrl.unblockStaff);
 
+// Password reset (admin → staff only; restaurant-scoped)
+router.patch("/:id/reset-password",  ctrl.resetStaffPassword);
+
 // Activity
 router.get("/:id/activity",          ctrl.getStaffActivity);
 

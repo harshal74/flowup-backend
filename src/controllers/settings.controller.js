@@ -1,5 +1,6 @@
-const Setting = require("../models/Setting");
-const Order   = require("../models/Order");
+const Setting          = require("../models/Setting");
+const Order            = require("../models/Order");
+const TableReservation = require("../models/TableReservation");
 
 // Get Settings
 const getSettings = async (req, res) => {
@@ -11,7 +12,8 @@ const getSettings = async (req, res) => {
       return res.status(400).json({ success: false, message: "restaurantId is required" });
     }
 
-    const settings = await Setting.findOne({ restaurantId });
+    const settings = await Setting.findOne({ restaurantId })
+      .select("-subscriptionAmount -suspendedBy -deletedAt");
 
     if (!settings) {
       return res.status(404).json({ success: false, message: "Settings not found" });
@@ -62,6 +64,23 @@ const updateSettings = async (req, res) => {
             conflictTables: tables,
           });
         }
+
+        // Also block if any table being removed has an ACTIVE reservation
+        const conflictReservations = await TableReservation.find({
+          restaurantId,
+          tableNumber: { $gt: newTotal },
+          status: "ACTIVE",
+        }).select("tableNumber guestName");
+
+        if (conflictReservations.length > 0) {
+          const rTables = [...new Set(conflictReservations.map(r => r.tableNumber))].sort((a, b) => a - b);
+          const rStr = rTables.join(", ");
+          return res.status(409).json({
+            success: false,
+            message: `Cannot reduce table count to ${newTotal} because table${rTables.length > 1 ? "s" : ""} ${rStr} ${rTables.length > 1 ? "have" : "has"} an active reservation. Please cancel those reservations first.`,
+            conflictTables: rTables,
+          });
+        }
       }
 
       // Store as integer
@@ -75,17 +94,86 @@ const updateSettings = async (req, res) => {
     delete req.body.suspendedAt;
     delete req.body.suspendedBy;
     delete req.body.suspensionReason;
+    // Subscription expiry is managed exclusively by SUPER_ADMIN via the Platform API.
+    // A restaurant admin must never be able to extend, clear, or change their own expiry.
+    delete req.body.expiresAt;
+    // Subscription amount is PLATFORM PRIVATE DATA — never writable by restaurant admin.
+    delete req.body.subscriptionAmount;
+
+    // ── GST rate validation ──────────────────────────────────
+    if (req.body.sgstRate !== undefined) {
+      const r = Number(req.body.sgstRate);
+      if (isNaN(r) || r < 0 || r > 50) {
+        return res.status(400).json({ success: false, message: "SGST rate must be a number between 0 and 50." });
+      }
+      req.body.sgstRate = r;
+    }
+    if (req.body.cgstRate !== undefined) {
+      const r = Number(req.body.cgstRate);
+      if (isNaN(r) || r < 0 || r > 50) {
+        return res.status(400).json({ success: false, message: "CGST rate must be a number between 0 and 50." });
+      }
+      req.body.cgstRate = r;
+    }
+
+    // ── FIX: Explicit whitelist — only restaurant-admin-writable fields ──────
+    // Mass-assignment protection: only the fields listed here can be updated
+    // by a restaurant admin. Platform-only and internal fields are never
+    // included regardless of what the request body contains.
+    //
+    // Protected fields NOT in this list (always blocked):
+    //   restaurantId, restaurantSlug, accountStatus, suspendedAt, suspendedBy,
+    //   suspensionReason, expiresAt, subscriptionAmount, createdAt, updatedAt,
+    //   and any future platform-internal field not explicitly whitelisted here.
+    const allowedUpdates = {};
+
+    const stringFields = [
+      "restaurantName", "restaurantDescription", "restaurantLogo",
+      "whatsappNumber", "contactNumber", "email", "address",
+      "openingTime", "closingTime", "currency", "upiId",
+      "deliveryPaymentMode",
+    ];
+    for (const field of stringFields) {
+      if (req.body[field] !== undefined) allowedUpdates[field] = req.body[field];
+    }
+
+    const numberFields = [
+      "deliveryCharge", "minimumOrderAmount", "averagePreparationTime",
+      "sgstRate", "cgstRate",
+    ];
+    for (const field of numberFields) {
+      if (req.body[field] !== undefined) allowedUpdates[field] = req.body[field];
+    }
+
+    const boolFields = ["feedbackEnabled", "whatsappNotificationsEnabled", "gstEnabled"];
+    for (const field of boolFields) {
+      if (req.body[field] !== undefined) allowedUpdates[field] = req.body[field];
+    }
+
+    // totalTables was validated and sanitised above — include the clean integer value
+    if (req.body.totalTables !== undefined) {
+      allowedUpdates.totalTables = req.body.totalTables;
+    }
 
     const settings = await Setting.findOneAndUpdate(
       { restaurantId },
-      { ...req.body, restaurantId },
+      { ...allowedUpdates, restaurantId },
       { upsert: true, returnDocument: 'after', runValidators: true }
     );
+
+    // ── FIX: Strip platform-private fields before returning to restaurant admin ──
+    // subscriptionAmount, suspendedBy, and deletedAt are platform-only data.
+    // They must never be exposed through any restaurant-facing API response,
+    // mirroring the .select("-subscriptionAmount -suspendedBy -deletedAt") in getSettings.
+    const safeData = settings.toObject();
+    delete safeData.subscriptionAmount;
+    delete safeData.suspendedBy;
+    delete safeData.deletedAt;
 
     return res.status(200).json({
       success: true,
       message: "Settings updated successfully",
-      data: settings,
+      data: safeData,
     });
   } catch (error) {
     console.error("Update Settings Error:", error);
@@ -107,10 +195,16 @@ const openShop = async (req, res) => {
       { returnDocument: 'after' }
     );
 
+    // Strip platform-private fields before returning to restaurant admin
+    const safeData = settings.toObject();
+    delete safeData.subscriptionAmount;
+    delete safeData.suspendedBy;
+    delete safeData.deletedAt;
+
     return res.status(200).json({
       success: true,
       message: "Shop opened successfully",
-      data: settings,
+      data: safeData,
     });
   } catch (error) {
     console.error("Open Shop Error:", error);
@@ -133,10 +227,16 @@ const closeShop = async (req, res) => {
       { returnDocument: 'after' }
     );
 
+    // Strip platform-private fields before returning to restaurant admin
+    const safeData = settings.toObject();
+    delete safeData.subscriptionAmount;
+    delete safeData.suspendedBy;
+    delete safeData.deletedAt;
+
     return res.status(200).json({
       success: true,
       message: "Shop closed successfully",
-      data: settings,
+      data: safeData,
     });
   } catch (error) {
     console.error("Close Shop Error:", error);
@@ -169,10 +269,16 @@ const toggleFeedback = async (req, res) => {
 
     await settings.save();
 
+    // Strip platform-private fields before returning to restaurant admin
+    const safeData = settings.toObject();
+    delete safeData.subscriptionAmount;
+    delete safeData.suspendedBy;
+    delete safeData.deletedAt;
+
     return res.status(200).json({
       success: true,
       message: "Feedback setting updated",
-      data: settings,
+      data: safeData,
     });
   } catch (error) {
     console.error("Toggle Feedback Error:", error);
@@ -208,10 +314,16 @@ const toggleWhatsappNotifications = async (
 
     await settings.save();
 
+    // Strip platform-private fields before returning to restaurant admin
+    const safeData = settings.toObject();
+    delete safeData.subscriptionAmount;
+    delete safeData.suspendedBy;
+    delete safeData.deletedAt;
+
     return res.status(200).json({
       success: true,
       message: "WhatsApp setting updated",
-      data: settings,
+      data: safeData,
     });
   } catch (error) {
     console.error(

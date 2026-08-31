@@ -26,11 +26,11 @@ const protect = async (req, res, next) => {
       });
     }
 
-    // SUPER_ADMIN bypasses restaurant suspension checks
+    // SUPER_ADMIN bypasses restaurant suspension and expiry checks
     if (admin.role !== "SUPER_ADMIN") {
-      // Check restaurant account status for regular ADMINs
+      // Check restaurant account status and expiry for regular ADMINs
       const settings = await Setting.findOne({ restaurantId: admin.restaurantId })
-        .select("accountStatus")
+        .select("accountStatus expiresAt")
         .lean();
 
       if (settings?.accountStatus === "SUSPENDED") {
@@ -38,6 +38,17 @@ const protect = async (req, res, next) => {
           success: false,
           message: "Your restaurant has been suspended. Please contact FlowUp support.",
           suspended: true,
+        });
+      }
+
+      // Expiry check: block if current time >= expiresAt (India calendar-date semantics)
+      // expiresAt stores the exclusive UTC instant of the start of the next IST calendar day.
+      // null expiresAt = no expiry = always allowed.
+      if (settings?.expiresAt && new Date() >= new Date(settings.expiresAt)) {
+        return res.status(403).json({
+          success: false,
+          message: "Your restaurant subscription has expired. Please contact FlowUp support.",
+          expired: true,
         });
       }
     }

@@ -10,6 +10,19 @@ const platformAuditLogSchema = new mongoose.Schema(
         "RESTAURANT_SUSPENDED",
         "RESTAURANT_REACTIVATED",
         "RESTAURANT_SLUG_CHANGED",
+        // Expiry management (these were missing — caused silent save failures)
+        "RESTAURANT_EXPIRY_SET",
+        "RESTAURANT_EXPIRY_CLEARED",
+        // Subscription amount
+        "SUBSCRIPTION_AMOUNT_UPDATED",
+        // Finance transactions
+        "FINANCE_REVENUE_ADDED",
+        "FINANCE_INVESTMENT_ADDED",
+        "FINANCE_EXPENSE_ADDED",
+        "FINANCE_TRANSACTION_DELETED",
+        "FINANCE_TRANSACTION_UPDATED",
+        // Password management
+        "ADMIN_PASSWORD_RESET",
       ],
     },
 

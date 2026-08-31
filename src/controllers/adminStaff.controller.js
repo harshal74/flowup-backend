@@ -11,12 +11,21 @@ const StaffActivity = require("../models/StaffActivity");
 const { logActivity }  = require("../services/staffActivityService");
 
 const EMAIL_RE  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MOBILE_RE = /^\+?\d{7,15}$/;
+const { isValidMobile, normalizeMobile, MOBILE_ERROR_MESSAGE } = require("../utils/validateMobile");
 const MANAGEABLE_ROLES = ["CHEF", "WAITER", "ASSISTANT"];
 
 // ── Helper ────────────────────────────────────────────────────────
 function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
+}
+
+/**
+ * Escape a user-supplied string for safe use inside a MongoDB $regex.
+ * Without escaping, a search for "(" produces a regex parse error (500),
+ * and patterns like "(a+)+" are treated as executable regex (ReDoS risk).
+ */
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // ── GET /api/admin/staff ──────────────────────────────────────────
@@ -63,7 +72,8 @@ exports.getStaff = async (req, res) => {
     }
 
     if (search && search.trim()) {
-      const q = search.trim();
+      // FIX: escape user input to prevent regex parse errors (e.g. "(") and ReDoS
+      const q = escapeRegex(search.trim());
       conditions.push({
         $or: [
           { name:   { $regex: q, $options: "i" } },
@@ -215,8 +225,8 @@ exports.createStaff = async (req, res) => {
     if (!EMAIL_RE.test(email.trim())) {
       return res.status(400).json({ success: false, message: "Invalid email format" });
     }
-    if (!MOBILE_RE.test(mobile.trim().replace(/\s/g, ""))) {
-      return res.status(400).json({ success: false, message: "Invalid mobile number" });
+    if (!isValidMobile(mobile)) {
+      return res.status(400).json({ success: false, message: MOBILE_ERROR_MESSAGE });
     }
     if (password.length < 6) {
       return res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
@@ -242,7 +252,7 @@ exports.createStaff = async (req, res) => {
       restaurantId,
       name:            name.trim(),
       email:           normEmail,
-      mobile:          mobile.trim().replace(/\s/g, ""),
+      mobile:          normalizeMobile(mobile),
       password:        hashed,
       role,
       status:          "ACTIVE",
@@ -429,10 +439,10 @@ exports.updateStaff = async (req, res) => {
 
     if (name   !== undefined && name.trim())   update.name   = name.trim();
     if (mobile !== undefined && mobile.trim()) {
-      if (!MOBILE_RE.test(mobile.trim().replace(/\s/g, ""))) {
-        return res.status(400).json({ success: false, message: "Invalid mobile number" });
+      if (!isValidMobile(mobile)) {
+        return res.status(400).json({ success: false, message: MOBILE_ERROR_MESSAGE });
       }
-      update.mobile = mobile.trim().replace(/\s/g, "");
+      update.mobile = normalizeMobile(mobile);
     }
     if (role !== undefined) {
       if (!MANAGEABLE_ROLES.includes(role)) {
@@ -532,6 +542,70 @@ exports.unblockStaff = async (req, res) => {
   } catch (err) {
     console.error("AdminStaff unblockStaff:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// ── PATCH /api/admin/staff/:id/reset-password ─────────────────────
+// Restaurant ADMIN resets a staff member's password.
+// Only targets CHEF, WAITER, ASSISTANT in the same restaurant.
+// Never reads or returns any existing password or hash.
+exports.resetStaffPassword = async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid staff ID." });
+    }
+    const restaurantId = req.user.restaurantId;
+    const { newPassword } = req.body;
+
+    // ── Validate newPassword ───────────────────────────────────
+    if (!newPassword || typeof newPassword !== "string" || !newPassword.trim()) {
+      return res.status(400).json({ success: false, message: "New password is required." });
+    }
+    const trimmedPassword = newPassword.trim();
+    if (trimmedPassword.length < 8) {
+      return res.status(400).json({ success: false, message: "Password must be at least 8 characters." });
+    }
+    if (trimmedPassword.length > 128) {
+      return res.status(400).json({ success: false, message: "Password must be 128 characters or fewer." });
+    }
+
+    // ── Find staff — restaurant-scoped, manageable roles only ──
+    // This prevents resetting ADMIN or SUPER_ADMIN passwords,
+    // and prevents cross-restaurant access.
+    const staff = await Staff.findOne({
+      _id:          req.params.id,
+      restaurantId,
+      role:         { $in: MANAGEABLE_ROLES },
+    });
+
+    if (!staff) {
+      // Return 404 regardless of reason — do not reveal cross-restaurant existence
+      return res.status(404).json({ success: false, message: "Staff not found." });
+    }
+
+    // ── Hash and save — never store plaintext ──────────────────
+    const hashedPassword = await bcrypt.hash(trimmedPassword, 10);
+    staff.password = hashedPassword;
+    await staff.save();
+
+    // ── Audit log — fire-and-forget, NO password in log ───────
+    logActivity({
+      staff: { _id: req.user._id, restaurantId, name: req.user.name, role: "ADMIN" },
+      action:     "STAFF_PASSWORD_RESET",
+      entityType: "Staff",
+      entityId:   staff._id,
+      oldValue:   "",
+      newValue:   `Password reset for ${staff.name} (${staff.role})`,
+      req,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Staff password has been reset successfully.",
+    });
+  } catch (err) {
+    console.error("AdminStaff resetStaffPassword:", err);
+    return res.status(500).json({ success: false, message: "Failed to reset staff password." });
   }
 };
 

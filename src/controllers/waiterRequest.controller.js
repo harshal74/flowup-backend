@@ -1,4 +1,5 @@
 const WaiterRequest = require("../models/WaiterRequest");
+const Setting       = require("../models/Setting");
 const { emitToRestaurant } = require("../socket");
 
 // ── Create (public — called by customer) ─────────────────────────
@@ -14,6 +15,17 @@ const createWaiterRequest = async (req, res) => {
 
     if (!tableNumber || tableNumber < 1) {
       return res.status(400).json({ success: false, message: "Table number is required" });
+    }
+
+    // SECURITY FIX: validate tableNumber does not exceed restaurant's totalTables.
+    // Without this, a customer can submit tableNumber=999 for a non-existent table.
+    const settings = await Setting.findOne({ restaurantId }).select("totalTables").lean();
+    const maxTables = settings?.totalTables || 10;
+    if (Number(tableNumber) > maxTables) {
+      return res.status(400).json({
+        success: false,
+        message: `Table number must be between 1 and ${maxTables}.`,
+      });
     }
 
     // Block duplicate requests within 5 minutes from the same table + restaurant

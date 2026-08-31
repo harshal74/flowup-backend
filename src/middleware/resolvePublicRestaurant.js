@@ -35,13 +35,13 @@ const resolvePublicRestaurant = async (req, res, next) => {
     // Resolve by restaurantId (primary)
     if (rawId && typeof rawId === "string" && rawId.trim()) {
       const restaurantId = rawId.trim();
-      restaurant = await Setting.findOne({ restaurantId }).select("restaurantId accountStatus").lean();
+      restaurant = await Setting.findOne({ restaurantId }).select("restaurantId accountStatus expiresAt").lean();
     }
 
     // Resolve by restaurantSlug (secondary — public URL)
     if (!restaurant && rawSlug && typeof rawSlug === "string" && rawSlug.trim()) {
       const slug = rawSlug.trim().toLowerCase();
-      restaurant = await Setting.findOne({ restaurantSlug: slug }).select("restaurantId accountStatus").lean();
+      restaurant = await Setting.findOne({ restaurantSlug: slug }).select("restaurantId accountStatus expiresAt").lean();
     }
 
     if (!restaurant) {
@@ -56,6 +56,15 @@ const resolvePublicRestaurant = async (req, res, next) => {
         success: false,
         message: "This restaurant is currently unavailable.",
         suspended: true,
+      });
+    }
+
+    // Expiry check: block public/customer access when subscription has expired
+    if (restaurant.expiresAt && new Date() >= new Date(restaurant.expiresAt)) {
+      return res.status(403).json({
+        success: false,
+        message: "This restaurant is currently unavailable.",
+        expired: true,
       });
     }
 

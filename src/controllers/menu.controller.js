@@ -10,13 +10,72 @@ function badId(id, res) {
   return false;
 }
 
+// ── Shared validation helper ─────────────────────────────────────
+// Returns an error message string, or null if valid.
+function validateMenuFields({ name, categoryId, price, discountedPrice }) {
+  // Category
+  if (!categoryId || !String(categoryId).trim()) {
+    return "Category must be selected.";
+  }
+  if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+    return "Invalid category.";
+  }
+
+  // Price
+  const priceNum = Number(price);
+  if (price === undefined || price === null || price === "" || isNaN(priceNum)) {
+    return "A valid price is required.";
+  }
+  if (priceNum < 0) {
+    return "Price cannot be negative.";
+  }
+
+  // Discounted price — optional but must be strictly less than price when provided
+  if (discountedPrice !== null && discountedPrice !== undefined && discountedPrice !== "") {
+    const discNum = Number(discountedPrice);
+    if (isNaN(discNum)) {
+      return "Discounted price must be a valid number.";
+    }
+    if (discNum < 0) {
+      return "Discounted price cannot be negative.";
+    }
+    if (discNum >= priceNum) {
+      return "Discounted price must be less than the actual price.";
+    }
+  }
+
+  return null; // all valid
+}
+
 // Create Menu Item
 const createMenu = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
+    const { name, categoryId, price, discountedPrice } = req.body;
+
+    // ── Validation ──────────────────────────────────────────────
+    const validationError = validateMenuFields({ name, categoryId, price, discountedPrice });
+    if (validationError) {
+      return res.status(400).json({ success: false, message: validationError });
+    }
+
+    // ── Duplicate name check (case-insensitive, trimmed whitespace) ──
+    const trimmedName = String(name).trim();
+    const existing = await Menu.findOne({
+      restaurantId,
+      name: { $regex: `^${trimmedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
+    }).select("_id").lean();
+
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: "A menu item with this name already exists in this restaurant.",
+      });
+    }
 
     const menu = await Menu.create({
       ...req.body,
+      name: trimmedName,
       restaurantId,
     });
 
@@ -27,11 +86,7 @@ const createMenu = async (req, res) => {
     });
   } catch (error) {
     console.error("Create Menu Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
@@ -146,8 +201,41 @@ const updateMenu = async (req, res) => {
       displayOrder, tags, categoryId,
     } = req.body;
 
+    // ── Validation (only on fields being updated) ───────────────
+    // Resolve effective values: use incoming value if provided, else keep existing
+    const effectivePrice          = price          !== undefined ? price          : menu.price;
+    const effectiveDiscounted     = discountedPrice !== undefined ? discountedPrice : menu.discountedPrice;
+    const effectiveCategoryId     = categoryId     !== undefined ? categoryId     : String(menu.categoryId);
+
+    const validationError = validateMenuFields({
+      name:            name !== undefined ? name : menu.name,
+      categoryId:      effectiveCategoryId,
+      price:           effectivePrice,
+      discountedPrice: effectiveDiscounted,
+    });
+    if (validationError) {
+      return res.status(400).json({ success: false, message: validationError });
+    }
+
+    // ── Duplicate name check (excluding this item) ──────────────
+    if (name !== undefined) {
+      const trimmedName = String(name).trim();
+      const duplicate = await Menu.findOne({
+        restaurantId,
+        _id: { $ne: req.params.id },
+        name: { $regex: `^${trimmedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
+      }).select("_id").lean();
+
+      if (duplicate) {
+        return res.status(409).json({
+          success: false,
+          message: "A menu item with this name already exists in this restaurant.",
+        });
+      }
+    }
+
     const allowed = {};
-    if (name             !== undefined) allowed.name             = name;
+    if (name             !== undefined) allowed.name             = String(name).trim();
     if (description      !== undefined) allowed.description      = description;
     if (image            !== undefined) allowed.image            = image;
     if (price            !== undefined) allowed.price            = price;

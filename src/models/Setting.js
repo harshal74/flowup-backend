@@ -122,6 +122,28 @@ const settingSchema = new mongoose.Schema(
       default: "COD",
     },
 
+    // GST configuration
+    // Default: gstEnabled = false so existing restaurants are NOT affected by the new fields.
+    // An existing restaurant with no GST fields stored will use these schema defaults:
+    // gstEnabled=false → no GST added to bills (backward-compatible with the old hardcoded 5%
+    // which was only on the frontend; backend now reads from DB so safe default is false).
+    gstEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    sgstRate: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 50,
+    },
+    cgstRate: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 50,
+    },
+
     // Public URL slug (e.g., "abc-cafe" → /restaurant/abc-cafe)
     // Managed exclusively by SUPER_ADMIN. Not changeable by restaurant Admin.
     restaurantSlug: {
@@ -159,6 +181,33 @@ const settingSchema = new mongoose.Schema(
       default: null,
       trim: true,
       maxlength: 500,
+    },
+
+    // Subscription expiry date (managed by SUPER_ADMIN only)
+    // next calendar day in IST. For example, if the platform admin selects
+    // "30 Sep 2026", this field stores:
+    //   2026-10-01T00:00:00 IST = 2026-09-30T18:30:00.000Z
+    //
+    // Access is blocked when:   new Date() >= expiresAt
+    // Access is allowed when:   expiresAt is null  OR  new Date() < expiresAt
+    //
+    // Existing restaurants without this field = null = no expiry (backward-compatible).
+    // Do NOT use this field to auto-set accountStatus — expiry is an independent
+    // access-control condition separate from manual suspension.
+    expiresAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
+    // Subscription amount charged by FlowUp to this restaurant (₹/month).
+    // PLATFORM PRIVATE DATA — managed by SUPER_ADMIN only.
+    // NEVER returned in restaurant-facing, staff, or customer API responses.
+    // Default 0 for backward compatibility with existing restaurants.
+    subscriptionAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
   },
   {

@@ -1,9 +1,18 @@
 const DeliveryEnquiry     = require("../models/DeliveryEnquiry");
 const { emitToRestaurant } = require("../socket");
 
-const MOBILE_RE = /^[+]?[\d\s\-()\+]{7,20}$/;
+const { isValidMobile, MOBILE_ERROR_MESSAGE } = require("../utils/validateMobile");
 const EMAIL_RE  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_STATUSES = ["NEW", "CONTACTED", "RESOLVED", "CLOSED"];
+
+/**
+ * Escape a user-supplied string for safe use inside a MongoDB $regex.
+ * Without escaping, a search for "(" produces a regex parse error (500),
+ * and ".*" matches the entire collection (ReDoS risk).
+ */
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // ── POST /api/delivery-enquiries  (public) ─────────────────────────
 exports.createDeliveryEnquiry = async (req, res) => {
@@ -23,8 +32,8 @@ exports.createDeliveryEnquiry = async (req, res) => {
     if (String(customerName).trim().length > 100) {
       return res.status(400).json({ success: false, message: "Name must be 100 characters or fewer." });
     }
-    if (!mobile || !MOBILE_RE.test(String(mobile).trim())) {
-      return res.status(400).json({ success: false, message: "A valid mobile number is required." });
+    if (!isValidMobile(String(mobile).trim())) {
+      return res.status(400).json({ success: false, message: MOBILE_ERROR_MESSAGE });
     }
     if (!address || !String(address).trim()) {
       return res.status(400).json({ success: false, message: "Delivery address is required." });
@@ -104,11 +113,12 @@ exports.getDeliveryEnquiries = async (req, res) => {
     }
 
     if (search && search.trim()) {
-      const q = search.trim();
+      // FIX H2: escape user input before using in MongoDB $regex
+      const safeQ = escapeRegex(search.trim());
       filter.$or = [
-        { customerName: { $regex: q, $options: "i" } },
-        { mobile:       { $regex: q, $options: "i" } },
-        { address:      { $regex: q, $options: "i" } },
+        { customerName: { $regex: safeQ, $options: "i" } },
+        { mobile:       { $regex: safeQ, $options: "i" } },
+        { address:      { $regex: safeQ, $options: "i" } },
       ];
     }
 

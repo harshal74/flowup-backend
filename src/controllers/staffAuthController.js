@@ -3,9 +3,13 @@ const jwt    = require("jsonwebtoken");
 const Staff  = require("../models/Staff");
 const Setting = require("../models/Setting");
 const { logActivity } = require("../services/staffActivityService");
+const {
+  recordStaffLogin,
+  recordStaffLoginFailed,
+} = require("../services/loginActivityService");
 
 const EMAIL_RE  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MOBILE_RE = /^\+?\d{7,15}$/;
+const { isValidMobile, normalizeMobile, MOBILE_ERROR_MESSAGE } = require("../utils/validateMobile");
 const VALID_ROLES = ["CHEF", "WAITER", "ASSISTANT"]; // ADMIN cannot self-register
 
 // ─────────────────────────────────────────────────────────────────
@@ -31,8 +35,8 @@ exports.signup = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid email format" });
     }
 
-    if (!MOBILE_RE.test(mobile.trim().replace(/\s/g, ""))) {
-      return res.status(400).json({ success: false, message: "Invalid mobile number (7–15 digits, optional leading +)" });
+    if (!isValidMobile(mobile)) {
+      return res.status(400).json({ success: false, message: MOBILE_ERROR_MESSAGE });
     }
 
     if (password.length < 6) {
@@ -84,7 +88,7 @@ exports.signup = async (req, res) => {
 
         const hashed = await bcrypt.hash(password, 10);
         existing.name = name.trim();
-        existing.mobile = mobile.trim().replace(/\s/g, "");
+        existing.mobile = normalizeMobile(mobile);
         existing.password = hashed;
         existing.role = role;
         // restaurantId intentionally NOT changed — remains the original restaurant
@@ -113,7 +117,7 @@ exports.signup = async (req, res) => {
       restaurantId:    restaurantId.trim(),
       name:            name.trim(),
       email:           normEmail,
-      mobile:          mobile.trim().replace(/\s/g, ""),
+      mobile:          normalizeMobile(mobile),
       password:        hashed,
       role,
       status:          "PENDING",
@@ -151,6 +155,7 @@ exports.login = async (req, res) => {
 
     // Always return same error for missing user or wrong password (prevent enumeration)
     if (!staff) {
+      recordStaffLoginFailed(email, "Invalid credentials", null, null, null, req);
       return res.status(401).json({ success: false, message: "Invalid email or password" });
     }
 
@@ -160,6 +165,7 @@ exports.login = async (req, res) => {
     const effectiveStatus = staff.status || (staff.isActive !== false ? "ACTIVE" : "BLOCKED");
 
     if (effectiveStatus === "PENDING") {
+      recordStaffLoginFailed(email, "Account pending approval", staff.role, staff.restaurantId, null, req);
       return res.status(403).json({
         success: false,
         message: "Your registration request is awaiting administrator approval.",
@@ -168,6 +174,7 @@ exports.login = async (req, res) => {
     }
 
     if (effectiveStatus === "REJECTED") {
+      recordStaffLoginFailed(email, "Account rejected", staff.role, staff.restaurantId, null, req);
       return res.status(403).json({
         success: false,
         message: "Your registration request was rejected.",
@@ -176,6 +183,7 @@ exports.login = async (req, res) => {
     }
 
     if (effectiveStatus === "BLOCKED" || !staff.isActive) {
+      recordStaffLoginFailed(email, "Account blocked", staff.role, staff.restaurantId, null, req);
       return res.status(403).json({
         success: false,
         message: "Your account has been blocked by the administrator.",
@@ -185,19 +193,30 @@ exports.login = async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, staff.password);
     if (!isMatch) {
+      recordStaffLoginFailed(email, "Invalid credentials", staff.role, staff.restaurantId, null, req);
       return res.status(401).json({ success: false, message: "Invalid email or password" });
     }
 
-    // ── Check restaurant suspension ───────────────────────────
+    // ── Check restaurant suspension and expiry ────────────────
     const restaurantSettings = await Setting.findOne({ restaurantId: staff.restaurantId })
-      .select("accountStatus")
+      .select("accountStatus expiresAt restaurantName")
       .lean();
 
     if (restaurantSettings?.accountStatus === "SUSPENDED") {
+      recordStaffLoginFailed(email, "Restaurant suspended", staff.role, staff.restaurantId, restaurantSettings?.restaurantName || null, req);
       return res.status(403).json({
         success: false,
         message: "This restaurant is currently suspended.",
         suspended: true,
+      });
+    }
+
+    if (restaurantSettings?.expiresAt && new Date() >= new Date(restaurantSettings.expiresAt)) {
+      recordStaffLoginFailed(email, "Restaurant expired", staff.role, staff.restaurantId, restaurantSettings?.restaurantName || null, req);
+      return res.status(403).json({
+        success: false,
+        message: "This restaurant's subscription has expired. Please contact FlowUp support.",
+        expired: true,
       });
     }
 
@@ -210,7 +229,7 @@ exports.login = async (req, res) => {
     staff.lastLogin = new Date();
     await staff.save();
 
-    // Log login activity (fire-and-forget)
+    // Log to staff activity (existing feature — unchanged)
     logActivity({
       staff: { _id: staff._id, restaurantId: staff.restaurantId, name: staff.name, role: staff.role },
       action: "LOGIN",
@@ -219,6 +238,9 @@ exports.login = async (req, res) => {
       newValue: "Logged in",
       req,
     });
+
+    // Record platform login audit — fire-and-forget
+    recordStaffLogin(staff, req, restaurantSettings?.restaurantName || null);
 
     return res.status(200).json({
       success: true,
@@ -287,13 +309,13 @@ exports.updateProfile = async (req, res) => {
       }
     }
 
-    if (mobile !== undefined && mobile && !MOBILE_RE.test(mobile.trim())) {
-      return res.status(400).json({ success: false, message: "Invalid mobile number format" });
+    if (mobile !== undefined && mobile && !isValidMobile(mobile)) {
+      return res.status(400).json({ success: false, message: MOBILE_ERROR_MESSAGE });
     }
 
     const update = { updatedBy: req.staff._id };
     if (name)                        update.name         = name.trim();
-    if (mobile)                      update.mobile       = mobile.trim();
+    if (mobile)                      update.mobile       = normalizeMobile(mobile);
     if (profileImage !== undefined)  update.profileImage = profileImage;
 
     const updated = await Staff.findByIdAndUpdate(

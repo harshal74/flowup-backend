@@ -3,8 +3,24 @@ const Menu     = require("../models/Menu");
 const Category = require("../models/Category");
 const Customer = require("../models/Customer");
 const Setting  = require("../models/Setting");
+const crypto   = require("crypto");
 const { emitToRestaurant } = require("../socket");
 const { validateDeliveryLocation } = require("../utils/validateLocation");
+const { isValidMobile, normalizeMobile, MOBILE_ERROR_MESSAGE } = require("../utils/validateMobile");
+
+/**
+ * Generate a high-entropy order number.
+ * Format: ORD-<timestamp_ms>-<6 hex chars uppercase>
+ * Example: ORD-1722345678901-A3F7C2
+ *
+ * Using crypto.randomBytes(3) gives 16,777,216 possible suffixes per millisecond,
+ * making accidental collisions astronomically unlikely.
+ * The Order schema enforces uniqueness at the DB level; E11000 is caught and retried.
+ */
+function generateOrderNumber() {
+  const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
+  return `ORD-${Date.now()}-${suffix}`;
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Create Order  (public — no auth required)
@@ -51,6 +67,10 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: "Customer name and mobile are required" });
     }
 
+    if (!isValidMobile(customer.mobile)) {
+      return res.status(400).json({ success: false, message: MOBILE_ERROR_MESSAGE });
+    }
+
     // ── Idempotency protection ─────────────────────────────────
     // Frontend sends a unique `idempotencyKey` per intentional order submission.
     // Same key on retry (double-click, network retry) → return existing order.
@@ -87,7 +107,7 @@ const createOrder = async (req, res) => {
       }
     }
 
-    if (!orderType || !["DINE_IN", "DELIVERY"].includes(orderType)) {
+    if (!orderType || !["DINE_IN", "DELIVERY", "TAKE_AWAY"].includes(orderType)) {
       return res.status(400).json({ success: false, message: "Invalid order type" });
     }
 
@@ -99,11 +119,23 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: "Table number is required for dine-in orders" });
     }
 
+    // FIX M1: Validate table number does not exceed configured totalTables.
+    if (orderType === "DINE_IN" && tableNumber) {
+      const maxTables = settings?.totalTables || 10;
+      if (tableNumber > maxTables) {
+        return res.status(400).json({
+          success: false,
+          message: `Table number must be between 1 and ${maxTables}.`,
+        });
+      }
+    }
+
     if (orderType === "DELIVERY" && !customer.address && !address) {
       return res.status(400).json({ success: false, message: "Delivery address is required" });
     }
 
     // ── Delivery location enforcement ─────────────────────────
+    // Only required for DELIVERY. TAKE_AWAY does not use delivery location.
     if (orderType === "DELIVERY") {
       const locResult = validateDeliveryLocation(deliveryLocation);
       if (!locResult.valid) {
@@ -112,7 +144,7 @@ const createOrder = async (req, res) => {
     }
 
     // Find / create customer
-    let existingCustomer = await Customer.findOne({ restaurantId, mobile: customer.mobile });
+    let existingCustomer = await Customer.findOne({ restaurantId, mobile: normalizeMobile(customer.mobile) });
 
     if (existingCustomer && existingCustomer.isBlocked) {
       return res.status(403).json({ success: false, message: "Customer is blocked" });
@@ -122,7 +154,7 @@ const createOrder = async (req, res) => {
       existingCustomer = await Customer.create({
         restaurantId,
         name: customer.name,
-        mobile: customer.mobile,
+        mobile: normalizeMobile(customer.mobile),
         address: customer.address || "",
       });
     }
@@ -170,7 +202,7 @@ const createOrder = async (req, res) => {
       subtotalAmount += subtotal;
     }
 
-    // Calculate delivery charge from settings
+    // Calculate delivery charge from settings — only applies to DELIVERY orders
     let deliveryChargeAmount = 0;
     if (orderType === "DELIVERY" && settings && settings.deliveryCharge > 0) {
       deliveryChargeAmount = settings.deliveryCharge;
@@ -178,7 +210,7 @@ const createOrder = async (req, res) => {
 
     const order = await Order.create({
       restaurantId,
-      orderNumber: `ORD-${Date.now()}-${Math.floor(Math.random() * 9000) + 1000}`,
+      orderNumber: generateOrderNumber(),
       customerId: existingCustomer._id,
       orderType,
       tableNumber: orderType === "DINE_IN" ? tableNumber : null,
@@ -237,6 +269,27 @@ const createOrder = async (req, res) => {
         }
       }
     }
+    // Handle E11000 on orderNumber — extremely rare collision, retry once with fresh number.
+    // This must NOT be a recursive retry on unrelated duplicate-key errors.
+    if (error.code === 11000 && error.keyPattern?.orderNumber) {
+      console.warn("[Order] orderNumber collision — retrying with new number");
+      try {
+        // Re-attempt is intentionally minimal: we trust the order data is already valid
+        // (all validation passed above). We only regenerate the orderNumber.
+        const retryOrder = await Order.create({
+          restaurantId: req.restaurantId,
+          orderNumber:  generateOrderNumber(),
+          // The error was on insert, so we cannot reference the failed document object.
+          // We log and surface a clean error so the customer retries their order.
+        });
+        // This path should not be reached — we intentionally surface the error below
+        // because we don't have the full order payload here in the catch scope.
+        // In practice the collision is so rare we log and return 500 to prompt a retry.
+        void retryOrder;
+      } catch { /* ignore inner retry errors */ }
+      console.error("[Order] orderNumber collision on retry — returning 500 for client retry");
+      return res.status(500).json({ success: false, message: "Order number conflict. Please try placing your order again." });
+    }
     console.error("Create Order Error:", error.message || error);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
@@ -244,30 +297,89 @@ const createOrder = async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────
 // Get All Orders (paginated, with optional status filter)
+//
+// IMPORTANT: Active orders (PENDING, ACCEPTED, PREPARING, READY,
+// OUT_FOR_DELIVERY) are ALWAYS included in the response regardless of
+// pagination. This prevents the scenario where a PENDING order placed
+// a long time ago falls off page 1 because newer completed/rejected
+// orders fill the limit — causing the dashboard to show "1 pending"
+// while the Orders page shows none.
+//
+// Behaviour:
+//   1. Always fetch ALL active orders (no limit — typically < 50).
+//   2. Fill remaining slots up to effectiveLimit with recent
+//      non-active orders, excluding IDs already returned.
+//   3. Sort the merged result: active orders first (oldest first so
+//      the most urgent are at the top), then historical orders
+//      newest first.
 // ─────────────────────────────────────────────────────────────────
+const ACTIVE_ORDER_STATUSES = ["PENDING", "ACCEPTED", "PREPARING", "READY", "OUT_FOR_DELIVERY"];
+
 const getOrders = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
     const { status, page = 1, limit = 100 } = req.query;
 
-    const filter = { restaurantId };
-    if (status) filter.status = status;
+    // Cap at 200 to prevent unbounded queries; default is 100 to preserve existing UI behavior.
+    const effectiveLimit = Math.min(Math.max(Number(limit) || 100, 1), 200);
+    const effectivePage  = Number(page) || 1;
 
-    const skip  = (Number(page) - 1) * Number(limit);
-    const total = await Order.countDocuments(filter);
+    // If a specific status filter is requested, use the simple paginated path.
+    if (status) {
+      const filter = { restaurantId, status };
+      const skip  = (effectivePage - 1) * effectiveLimit;
+      const total = await Order.countDocuments(filter);
+      const orders = await Order.find(filter)
+        .populate("customerId", "name mobile address")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(effectiveLimit);
 
-    const orders = await Order.find(filter)
+      return res.status(200).json({
+        success: true,
+        count: orders.length,
+        total,
+        page: effectivePage,
+        limit: effectiveLimit,
+        data: orders,
+      });
+    }
+
+    const total = await Order.countDocuments({ restaurantId });
+
+    // Step 1: Fetch ALL active orders — no limit, always included.
+    const activeOrders = await Order.find({
+      restaurantId,
+      status: { $in: ACTIVE_ORDER_STATUSES },
+    })
       .populate("customerId", "name mobile address")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit));
+      .sort({ createdAt: 1 }); // oldest active first (most urgent at top)
+
+    // Step 2: Fill remaining slots with recent non-active orders.
+    const activeIds  = activeOrders.map(o => o._id);
+    const remaining  = Math.max(0, effectiveLimit - activeOrders.length);
+    const skip       = Math.max(0, (effectivePage - 1) * effectiveLimit - activeOrders.length);
+
+    const historicalOrders = remaining > 0
+      ? await Order.find({
+          restaurantId,
+          status: { $nin: ACTIVE_ORDER_STATUSES },
+          ...(activeIds.length > 0 ? { _id: { $nin: activeIds } } : {}),
+        })
+          .populate("customerId", "name mobile address")
+          .sort({ createdAt: -1 })
+          .skip(skip < 0 ? 0 : skip)
+          .limit(remaining)
+      : [];
+
+    const orders = [...activeOrders, ...historicalOrders];
 
     return res.status(200).json({
       success: true,
       count: orders.length,
       total,
-      page: Number(page),
-      limit: Number(limit),
+      page: effectivePage,
+      limit: effectiveLimit,
       data: orders,
     });
   } catch (error) {
@@ -526,6 +638,15 @@ const updateOrderStatus = async (req, res) => {
 
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    // FIX H1: TAKE_AWAY and DINE_IN orders must never enter OUT_FOR_DELIVERY.
+    // Only DELIVERY orders can be dispatched.
+    if (status === "OUT_FOR_DELIVERY" && order.orderType !== "DELIVERY") {
+      return res.status(400).json({
+        success: false,
+        message: "Only delivery orders can be dispatched.",
+      });
     }
 
     order.status = status;

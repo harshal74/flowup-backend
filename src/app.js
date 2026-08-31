@@ -18,6 +18,8 @@ const contactRoutes          = require("./routes/contact.route");
 const deliveryEnquiryRoutes  = require("./routes/deliveryEnquiry.route");
 const leadsRoutes            = require("./routes/leads.route");
 const restaurantsRoutes      = require("./routes/restaurants.route");
+const tableReservationRoutes = require("./routes/tableReservation.route");
+const adminTableReservationRoutes = require("./routes/adminTableReservation.route");
 
 const app = express();
 
@@ -98,6 +100,8 @@ app.use("/api/contact",              contactRoutes);
 app.use("/api/delivery-enquiries",   deliveryEnquiryRoutes);
 app.use("/api/leads",                leadsRoutes);
 app.use("/api/restaurants",          restaurantsRoutes);
+app.use("/api/table-reservations",         tableReservationRoutes);
+app.use("/api/admin/table-reservations",   adminTableReservationRoutes);
 
 // ── 404 handler for unknown API routes ────────────────────────────
 app.use("/api/{*path}", (req, res) => {

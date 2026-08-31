@@ -23,6 +23,16 @@ const { validateDeliveryLocation } = require("../utils/validateLocation");
 
 const INTENT_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes
 
+/**
+ * Generate a high-entropy order number for payment-created orders.
+ * Matches the format used in order.controller.js for consistency.
+ * Format: ORD-<timestamp_ms>-<6 hex chars uppercase>
+ */
+function generateOrderNumber() {
+  const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
+  return `ORD-${Date.now()}-${suffix}`;
+}
+
 // ── Razorpay instance (lazy) ─────────────────────────────────────
 let razorpayInstance = null;
 function getRazorpay() {
@@ -67,7 +77,7 @@ async function createOrderFromIntent(intent) {
   try {
     order = await Order.create({
       restaurantId,
-      orderNumber: `ORD-${Date.now()}-${Math.floor(Math.random() * 9000) + 1000}`,
+      orderNumber: generateOrderNumber(),
       customerId: customer._id,
       orderType: "DELIVERY",
       tableNumber: null,
@@ -354,8 +364,10 @@ exports.razorpayWebhook = async (req, res) => {
   try {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
     if (!webhookSecret) {
-      console.warn("[Webhook] RAZORPAY_WEBHOOK_SECRET not configured — skipping");
-      return res.status(200).json({ status: "ok" });
+      // Reject — never return 200 for an unverified webhook.
+      // Logging the absence of the secret is safe; never log the secret value itself.
+      console.error("[Webhook] RAZORPAY_WEBHOOK_SECRET is not configured — rejecting webhook request");
+      return res.status(400).json({ success: false, message: "Webhook verification is not configured." });
     }
 
     // ── Verify webhook signature using RAW request body ───────
