@@ -200,6 +200,15 @@ const settingSchema = new mongoose.Schema(
       index: true,
     },
 
+    // Online delivery toggle — controlled by the restaurant admin.
+    // When false: DELIVERY orders are rejected at the backend and the
+    // Delivery button is hidden in the customer checkout UI.
+    // Default true so all existing restaurants keep delivery working (backward-compatible).
+    onlineDeliveryEnabled: {
+      type: Boolean,
+      default: true,
+    },
+
     // Subscription amount charged by FlowUp to this restaurant (₹/month).
     // PLATFORM PRIVATE DATA — managed by SUPER_ADMIN only.
     // NEVER returned in restaurant-facing, staff, or customer API responses.

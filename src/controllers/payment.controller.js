@@ -166,6 +166,13 @@ exports.createPaymentOrder = async (req, res) => {
     if (settings?.shopOpen === false) {
       return res.status(403).json({ success: false, message: "Restaurant is currently closed." });
     }
+    // Online delivery must also be enabled for payment-first flow
+    if (settings?.onlineDeliveryEnabled === false) {
+      return res.status(403).json({
+        success: false,
+        message: "Delivery is currently unavailable. Please choose Take Away or Dine In.",
+      });
+    }
     const mode = settings?.deliveryPaymentMode || "COD";
     if (mode === "COD") {
       return res.status(400).json({ success: false, message: "This restaurant only accepts Cash on Delivery." });

@@ -145,7 +145,7 @@ const updateSettings = async (req, res) => {
       if (req.body[field] !== undefined) allowedUpdates[field] = req.body[field];
     }
 
-    const boolFields = ["feedbackEnabled", "whatsappNotificationsEnabled", "gstEnabled"];
+    const boolFields = ["feedbackEnabled", "whatsappNotificationsEnabled", "gstEnabled", "onlineDeliveryEnabled"];
     for (const field of boolFields) {
       if (req.body[field] !== undefined) allowedUpdates[field] = req.body[field];
     }
@@ -338,6 +338,46 @@ const toggleWhatsappNotifications = async (
   }
 };
 
+// Toggle Online Delivery
+const toggleOnlineDelivery = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+
+    const settings = await Setting.findOne({ restaurantId });
+
+    if (!settings) {
+      return res.status(404).json({
+        success: false,
+        message: "Settings not found",
+      });
+    }
+
+    settings.onlineDeliveryEnabled = !settings.onlineDeliveryEnabled;
+
+    await settings.save();
+
+    // Strip platform-private fields before returning to restaurant admin
+    const safeData = settings.toObject();
+    delete safeData.subscriptionAmount;
+    delete safeData.suspendedBy;
+    delete safeData.deletedAt;
+
+    return res.status(200).json({
+      success: true,
+      message: settings.onlineDeliveryEnabled
+        ? "Online delivery enabled"
+        : "Online delivery disabled",
+      data: safeData,
+    });
+  } catch (error) {
+    console.error("Toggle Online Delivery Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
+
 module.exports = {
   getSettings,
   updateSettings,
@@ -345,4 +385,5 @@ module.exports = {
   closeShop,
   toggleFeedback,
   toggleWhatsappNotifications,
+  toggleOnlineDelivery,
 };

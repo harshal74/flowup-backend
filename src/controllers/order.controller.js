@@ -44,6 +44,17 @@ const createOrder = async (req, res) => {
       });
     }
 
+    // ── Online delivery enabled check ──────────────────────────
+    // onlineDeliveryEnabled defaults to true so existing restaurants are unaffected.
+    // When explicitly set to false, DELIVERY orders are rejected here (backend enforcement).
+    // TAKE_AWAY and DINE_IN are never blocked by this flag.
+    if (orderType === "DELIVERY" && settings?.onlineDeliveryEnabled === false) {
+      return res.status(403).json({
+        success: false,
+        message: "Delivery is currently unavailable. Please choose Take Away or Dine In.",
+      });
+    }
+
     // ── Delivery payment mode enforcement ──────────────────────
     // If restaurant requires PAYMENT_FIRST for delivery, reject COD attempts here.
     // The PAYMENT_FIRST flow uses /api/payment/verify-and-create-order instead.

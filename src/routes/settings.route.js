@@ -8,6 +8,7 @@ const {
   closeShop,
   toggleFeedback,
   toggleWhatsappNotifications,
+  toggleOnlineDelivery,
 } = require("../controllers/settings.controller");
 
 const protect = require("../middleware/auth.middleware");
@@ -35,6 +36,12 @@ router.patch(
   "/whatsapp",
   protect,
   toggleWhatsappNotifications
+);
+
+router.patch(
+  "/online-delivery",
+  protect,
+  toggleOnlineDelivery
 );
 
 module.exports = router;
