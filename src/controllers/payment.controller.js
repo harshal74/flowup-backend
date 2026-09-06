@@ -18,6 +18,10 @@ const Menu          = require("../models/Menu");
 const Category      = require("../models/Category");
 const Customer      = require("../models/Customer");
 const Setting       = require("../models/Setting");
+const {
+  sendOrderStatusWhatsApp,
+  buildPaymentConfirmedMessage,
+} = require("../services/whatsapp.service");
 const { emitToRestaurant } = require("../socket");
 const { validateDeliveryLocation } = require("../utils/validateLocation");
 
@@ -120,6 +124,42 @@ async function createOrderFromIntent(intent) {
 
   // Emit new_order
   emitToRestaurant(restaurantId, "new_order", populated);
+
+  // ── Phase 18: WhatsApp PAYMENT_SUCCESS notification ─────────────
+  // Only on the fresh-create path (the retry safety-net above returns `existing`
+  // BEFORE reaching here, so a duplicate webhook/verify does not re-notify).
+  // Server-verified amount from the PaymentIntent snapshot — never client-supplied.
+  // Fire-and-forget; payment/order creation must succeed regardless of WhatsApp.
+  Setting.findOne({ restaurantId })
+    .select("restaurantName whatsappNotificationsEnabled countryCode")
+    .lean()
+    .then(settings => {
+      if (settings?.whatsappNotificationsEnabled === false) return;
+      const mobile = populated.customerId?.mobile;
+      const restaurantName = settings?.restaurantName || "FlowUp Restaurant";
+      return sendOrderStatusWhatsApp({
+        mobile,
+        countryContext: settings?.countryCode,
+        logContext: {
+          restaurantId,
+          customerId: populated.customerId?._id,
+          orderId: populated._id,
+          countryCode: settings?.countryCode,
+        },
+        templateInput: {
+          restaurantName,
+          orderNumber: populated.orderNumber,
+          amount: Number(intent.totalAmount).toFixed(2),
+        },
+        body: buildPaymentConfirmedMessage({
+          orderNumber: populated.orderNumber,
+          restaurantName,
+          grandTotal: intent.totalAmount,
+        }),
+        event: "payment_confirmed",
+      });
+    })
+    .catch(err => console.error("[WhatsApp] payment_confirmed error:", err.message));
 
   return populated;
 }

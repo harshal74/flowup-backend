@@ -1,6 +1,7 @@
 const Setting          = require("../models/Setting");
 const Order            = require("../models/Order");
 const TableReservation = require("../models/TableReservation");
+const { isSupportedCountry } = require("../utils/phoneE164");
 
 // Get Settings
 const getSettings = async (req, res) => {
@@ -116,6 +117,26 @@ const updateSettings = async (req, res) => {
       req.body.cgstRate = r;
     }
 
+    // ── countryCode validation ────────────────────────────────
+    // ISO 3166-1 alpha-2, supported by phoneE164 (COUNTRY_DIAL_CODES).
+    // Normalize (trim + uppercase) then validate; reject "IND", "91",
+    // "+91", "india", "USA", empty, etc. with a clean 400 rather than an
+    // uncontrolled Mongoose ValidationError. Country is NEVER inferred from
+    // currency/address/whatsapp number.
+    if (req.body.countryCode !== undefined) {
+      if (typeof req.body.countryCode !== "string") {
+        return res.status(400).json({ success: false, message: "countryCode must be a string ISO alpha-2 code (e.g. IN, US, GB)." });
+      }
+      const cc = req.body.countryCode.trim().toUpperCase();
+      if (!isSupportedCountry(cc)) {
+        return res.status(400).json({
+          success: false,
+          message: "Unsupported or invalid countryCode. Use a supported ISO alpha-2 code (e.g. IN, US, GB, AE).",
+        });
+      }
+      req.body.countryCode = cc;
+    }
+
     // ── FIX: Explicit whitelist — only restaurant-admin-writable fields ──────
     // Mass-assignment protection: only the fields listed here can be updated
     // by a restaurant admin. Platform-only and internal fields are never
@@ -131,7 +152,7 @@ const updateSettings = async (req, res) => {
       "restaurantName", "restaurantDescription", "restaurantLogo",
       "whatsappNumber", "contactNumber", "email", "address",
       "openingTime", "closingTime", "currency", "upiId",
-      "deliveryPaymentMode",
+      "deliveryPaymentMode", "countryCode",
     ];
     for (const field of stringFields) {
       if (req.body[field] !== undefined) allowedUpdates[field] = req.body[field];

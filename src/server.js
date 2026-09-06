@@ -15,8 +15,18 @@ const mongoose = require("mongoose");
 const connectDB = require("./config/db");
 const { app, ALLOWED_ORIGINS } = require("./app");
 const { initSocket } = require("./socket");
+const { runWhatsAppStartupCheck } = require("./services/whatsappStartupCheck");
 
 connectDB();
+
+// ── WhatsApp Meta idempotency-index readiness (Phase 26) ──────────
+// READ-ONLY operator diagnostic. Runs once the DB connection is open. It never
+// creates/modifies an index, never crashes the app, and never enables Meta —
+// the authoritative fail-closed gate remains in the send path. If the index is
+// missing, Meta outbound stays BLOCKED while Twilio + the app keep working.
+mongoose.connection.once("open", () => {
+  runWhatsAppStartupCheck().catch(() => { /* never disturb startup */ });
+});
 
 // Wrap Express in a plain HTTP server so Socket.IO can share port 5000
 const httpServer = http.createServer(app);

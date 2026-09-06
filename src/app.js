@@ -20,6 +20,7 @@ const leadsRoutes            = require("./routes/leads.route");
 const restaurantsRoutes      = require("./routes/restaurants.route");
 const tableReservationRoutes = require("./routes/tableReservation.route");
 const adminTableReservationRoutes = require("./routes/adminTableReservation.route");
+const metaOnboardingRoutes        = require("./routes/metaOnboarding.route");
 
 const app = express();
 
@@ -71,7 +72,11 @@ app.use(express.json({
   // Capture raw body for Razorpay webhook signature verification.
   // Only stored for the webhook path to avoid unnecessary memory usage.
   verify: (req, _res, buf) => {
-    if (req.url === "/api/payment/webhook" || req.originalUrl === "/api/payment/webhook") {
+    const u = req.originalUrl || req.url || "";
+    if (u === "/api/payment/webhook" ||
+        u === "/api/whatsapp/meta/webhook") {
+      // Capture exact raw bytes for HMAC signature verification
+      // (Razorpay + Meta WhatsApp webhooks). Re-serialized JSON must NOT be used.
       req.rawBody = buf.toString("utf8");
     }
   },
@@ -102,6 +107,7 @@ app.use("/api/leads",                leadsRoutes);
 app.use("/api/restaurants",          restaurantsRoutes);
 app.use("/api/table-reservations",         tableReservationRoutes);
 app.use("/api/admin/table-reservations",   adminTableReservationRoutes);
+app.use("/api/whatsapp/meta",              metaOnboardingRoutes);
 
 // ── 404 handler for unknown API routes ────────────────────────────
 app.use("/api/{*path}", (req, res) => {

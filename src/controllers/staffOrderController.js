@@ -1,7 +1,61 @@
 const Order                = require("../models/Order");
+const Setting              = require("../models/Setting");
 const mongoose             = require("mongoose");
 const { emitToRestaurant } = require("../socket");
 const { logActivity }      = require("../services/staffActivityService");
+const {
+  sendOrderStatusWhatsApp,
+  buildOutForDeliveryMessage,
+  buildDeliveredMessage,
+} = require("../services/whatsapp.service");
+
+// ── WhatsApp notify helper (Phase 18) — fire-and-forget ──────────
+// Sends OUT_FOR_DELIVERY / DELIVERED notifications after a successful staff
+// transition. NEVER throws and NEVER blocks the transition response. Passes
+// structured templateInput (Phase 9) alongside the Twilio free-text body, so a
+// future Meta activation can build the approved template. Loads settings +
+// customer with their own queries (this controller does not preload them).
+function _notifyStaffTransition(restaurantId, orderId, notifyEvent) {
+  if (!notifyEvent) return;
+  Setting.findOne({ restaurantId })
+    .select("restaurantName whatsappNotificationsEnabled countryCode")
+    .lean()
+    .then(settings => {
+      if (settings?.whatsappNotificationsEnabled === false) return;
+      return Order.findById(orderId).populate("customerId", "mobile name").lean()
+        .then(order => {
+          if (!order) return;
+          const mobile = order.customerId?.mobile;
+          const restaurantName = settings?.restaurantName || "FlowUp Restaurant";
+          const common = {
+            mobile,
+            countryContext: settings?.countryCode,
+            logContext: {
+              restaurantId,
+              customerId: order.customerId?._id,
+              orderId: order._id,
+              countryCode: settings?.countryCode,
+            },
+            templateInput: { restaurantName, orderNumber: order.orderNumber },
+          };
+          if (notifyEvent === "out_for_delivery") {
+            return sendOrderStatusWhatsApp({
+              ...common,
+              body: buildOutForDeliveryMessage({ orderNumber: order.orderNumber, restaurantName }),
+              event: "out_for_delivery",
+            });
+          }
+          if (notifyEvent === "delivered") {
+            return sendOrderStatusWhatsApp({
+              ...common,
+              body: buildDeliveredMessage({ orderNumber: order.orderNumber, restaurantName }),
+              event: "delivered",
+            });
+          }
+        });
+    })
+    .catch(err => console.error(`[WhatsApp] ${notifyEvent} error:`, err.message));
+}
 
 // ── Edge-case guard: valid ObjectId ──────────────────────────────
 function isValidId(id) {
@@ -9,7 +63,7 @@ function isValidId(id) {
 }
 
 // ── Shared order transition helper ───────────────────────────────
-async function transitionOrder(req, res, { fromStatus, toStatus, staffField, action }) {
+async function transitionOrder(req, res, { fromStatus, toStatus, staffField, action, notifyEvent }) {
   try {
     const { id }       = req.params;
     const restaurantId = req.staff.restaurantId;
@@ -62,6 +116,11 @@ async function transitionOrder(req, res, { fromStatus, toStatus, staffField, act
       newValue:   toStatus,
       req,
     });
+
+    // Phase 18: WhatsApp notification for this transition — fire-and-forget.
+    // The status guard above (order.status !== fromStatus → 409) already
+    // prevents duplicate sends on repeated calls for the same transition.
+    _notifyStaffTransition(restaurantId, order._id, notifyEvent);
 
     return res.status(200).json({
       success: true,
@@ -169,6 +228,9 @@ exports.deliverOrder = async (req, res) => {
     toStatus:   "COMPLETED",
     staffField: "servedBy",
     action:     order.orderType === "DELIVERY" ? "Completed Delivery" : order.orderType === "TAKE_AWAY" ? "Completed Take Away" : "Delivered Order",
+    // DELIVERED notification applies to delivery orders only (a dine-in/take-away
+    // "completed" is not a delivery event).
+    notifyEvent: order.orderType === "DELIVERY" ? "delivered" : undefined,
   });
 };
 
@@ -203,5 +265,6 @@ exports.dispatchOrder = async (req, res) => {
     toStatus:   "OUT_FOR_DELIVERY",
     staffField: "servedBy",
     action:     "Dispatched Delivery",
+    notifyEvent: "out_for_delivery",
   });
 };

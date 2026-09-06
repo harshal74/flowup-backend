@@ -123,7 +123,7 @@ exports.generateBill = async (req, res) => {
     // ── Load restaurant settings once — used for GST, UPI, WhatsApp, and receipt ──
     // Must be fetched BEFORE the GST calculation block.
     const settings = await Setting.findOne({ restaurantId })
-      .select("restaurantName whatsappNotificationsEnabled upiId gstEnabled sgstRate cgstRate")
+      .select("restaurantName whatsappNotificationsEnabled upiId gstEnabled sgstRate cgstRate countryCode")
       .lean();
 
     // ── GST calculation — read from restaurant settings, not hardcoded ──
@@ -185,7 +185,18 @@ exports.generateBill = async (req, res) => {
     const upiId          = settings?.upiId          || "";
 
     if (settings?.whatsappNotificationsEnabled !== false) {
-      sendBillWhatsApp({ mobile: customerMobile, bill, customerName, restaurantName })
+      sendBillWhatsApp({
+        mobile: customerMobile,
+        countryContext: settings?.countryCode,
+        logContext: { restaurantId, customerId: orders[0].customerId?._id, orderId: orders[0]._id, countryCode: settings?.countryCode },
+        // Phase 18: structured Meta template input (Phase 9 flowup_bill).
+        templateInput: {
+          restaurantName,
+          invoiceNumber: bill.invoiceNumber,
+          amount: Number(bill.grandTotal).toFixed(2),
+        },
+        bill, customerName, restaurantName,
+      })
         .catch(err => console.error("[WhatsApp] Unexpected error:", err));
     }
 

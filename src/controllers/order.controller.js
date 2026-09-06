@@ -7,6 +7,12 @@ const crypto   = require("crypto");
 const { emitToRestaurant } = require("../socket");
 const { validateDeliveryLocation } = require("../utils/validateLocation");
 const { isValidMobile, normalizeMobile, MOBILE_ERROR_MESSAGE } = require("../utils/validateMobile");
+const {
+  sendOrderStatusWhatsApp,
+  buildOrderPlacedMessage,
+  buildOrderAcceptedMessage,
+  buildOrderRejectedMessage,
+} = require("../services/whatsapp.service");
 
 /**
  * Generate a high-entropy order number.
@@ -20,6 +26,61 @@ const { isValidMobile, normalizeMobile, MOBILE_ERROR_MESSAGE } = require("../uti
 function generateOrderNumber() {
   const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
   return `ORD-${Date.now()}-${suffix}`;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// WhatsApp: order rejected notification (fire-and-forget helper).
+//
+// Called from rejectOrder() in all three rejection paths:
+//   • gateway-not-configured (refund could not run)
+//   • refund processed
+//   • refund failed
+// and any future simple rejection path.
+//
+// This helper MUST NEVER throw and MUST NEVER be awaited — a WhatsApp
+// failure must not affect the rejection/refund response. It loads the
+// restaurant's settings + customer mobile asynchronously and sends a
+// rejected message only when whatsappNotificationsEnabled is not false.
+//
+// @param {string} restaurantId — scoped restaurant (from req.user, never client)
+// @param {object} order        — the rejected order document (has orderNumber, customerId)
+// @param {string} reason       — admin-supplied rejection reason (may be empty)
+// ─────────────────────────────────────────────────────────────────
+function _notifyRejected(restaurantId, order, reason) {
+  if (!order) return;
+  Setting.findOne({ restaurantId })
+    .select("restaurantName whatsappNotificationsEnabled countryCode")
+    .lean()
+    .then(settings => {
+      if (settings?.whatsappNotificationsEnabled === false) return;
+      return Order.findById(order._id)
+        .populate("customerId", "mobile name")
+        .lean()
+        .then(populated => {
+          const mobile = populated?.customerId?.mobile;
+          const restaurantName = settings?.restaurantName || "FlowUp Restaurant";
+          return sendOrderStatusWhatsApp({
+            mobile,
+            countryContext: settings?.countryCode,
+            logContext: { restaurantId, customerId: populated?.customerId?._id, orderId: order._id, countryCode: settings?.countryCode },
+            // Phase 18: structured Meta template input (Phase 9 flowup_order_rejected).
+            // reason is optional in the registry. Used only when Meta is enabled;
+            // the Twilio free-text body is unchanged below.
+            templateInput: {
+              restaurantName,
+              orderNumber: order.orderNumber,
+              reason: reason || "",
+            },
+            body: buildOrderRejectedMessage({
+              orderNumber:   order.orderNumber,
+              restaurantName,
+              reason,
+            }),
+            event: "order_rejected",
+          });
+        });
+    })
+    .catch(err => console.error("[WhatsApp] order_rejected error:", err.message));
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -255,6 +316,32 @@ const createOrder = async (req, res) => {
     // ── Emit new_order to admin dashboard ──────────────────────
     emitToRestaurant(restaurantId, "new_order", populatedOrder);
 
+    // ── WhatsApp: order placed (DINE_IN, DELIVERY, TAKE_AWAY) ──
+    // Fire-and-forget — WhatsApp failure must never fail order creation.
+    // settings is already loaded above; restaurantName comes from there.
+    if (settings?.whatsappNotificationsEnabled !== false) {
+      const customerMobile = populatedOrder.customerId?.mobile;
+      const restaurantName = settings?.restaurantName || "FlowUp Restaurant";
+      sendOrderStatusWhatsApp({
+        mobile: customerMobile,
+        countryContext: settings?.countryCode,
+        logContext: { restaurantId, customerId: populatedOrder.customerId?._id, orderId: populatedOrder._id, countryCode: settings?.countryCode },
+        // Phase 18: structured Meta template input (Phase 9 flowup_order_placed).
+        templateInput: {
+          restaurantName,
+          orderNumber: populatedOrder.orderNumber,
+          orderTotal:  Number(populatedOrder.totalAmount).toFixed(2),
+        },
+        body:   buildOrderPlacedMessage({
+          orderNumber:   populatedOrder.orderNumber,
+          restaurantName,
+          totalAmount:   populatedOrder.totalAmount,
+          orderType:     populatedOrder.orderType,
+        }),
+        event: "order_placed",
+      }).catch(err => console.error("[WhatsApp] order_placed error:", err.message));
+    }
+
     return res.status(201).json({
       success: true,
       message: "Order placed successfully",
@@ -448,6 +535,38 @@ const acceptOrder = async (req, res) => {
       acceptedAt: order.acceptedAt,
     });
 
+    // ── WhatsApp: accepted — DELIVERY only ─────────────────────
+    // For DINE_IN / TAKE_AWAY the customer is already in the restaurant;
+    // an accepted notification adds no value and creates noise.
+    // Fire-and-forget — acceptance must succeed regardless of WhatsApp.
+    if (order.orderType === "DELIVERY") {
+      Setting.findOne({ restaurantId }).select("restaurantName whatsappNotificationsEnabled countryCode").lean()
+        .then(settings => {
+          if (settings?.whatsappNotificationsEnabled === false) return;
+          return Order.findById(order._id).populate("customerId", "mobile name").lean()
+            .then(populated => {
+              const mobile = populated?.customerId?.mobile;
+              const restaurantName = settings?.restaurantName || "FlowUp Restaurant";
+              return sendOrderStatusWhatsApp({
+                mobile,
+                countryContext: settings?.countryCode,
+                logContext: { restaurantId, customerId: populated?.customerId?._id, orderId: order._id, countryCode: settings?.countryCode },
+                // Phase 18: structured Meta template input (Phase 9 flowup_order_accepted).
+                templateInput: {
+                  restaurantName,
+                  orderNumber: order.orderNumber,
+                },
+                body: buildOrderAcceptedMessage({
+                  orderNumber:   order.orderNumber,
+                  restaurantName,
+                }),
+                event: "order_accepted",
+              });
+            });
+        })
+        .catch(err => console.error("[WhatsApp] order_accepted error:", err.message));
+    }
+
     return res.status(200).json({ success: true, message: "Order accepted successfully", data: order });
   } catch (error) {
     console.error("Accept Order Error:", error);
@@ -534,6 +653,8 @@ const rejectOrder = async (req, res) => {
           orderId: updated._id, status: "REJECTED", rejectedAt: updated.rejectedAt,
           rejectionReason: reason, paymentStatus: updated.paymentStatus, refundStatus: updated.refundStatus,
         });
+        // ── WhatsApp: rejected ──────────────────────────────────
+        _notifyRejected(restaurantId, updated, reason);
         return res.status(200).json({
           success: true,
           message: "Order rejected. Refund could not be processed (gateway not configured).",
@@ -571,6 +692,9 @@ const rejectOrder = async (req, res) => {
           rejectionReason: reason, paymentStatus: "REFUNDED", refundStatus: "PROCESSED",
         });
 
+        // ── WhatsApp: rejected (refund processed) ───────────────
+        _notifyRejected(restaurantId, refunded, reason);
+
         return res.status(200).json({
           success: true,
           message: `Order rejected — refund of ₹${locked.totalAmount} initiated.`,
@@ -598,6 +722,9 @@ const rejectOrder = async (req, res) => {
           rejectionReason: reason, paymentStatus: failed.paymentStatus, refundStatus: "FAILED",
         });
 
+        // ── WhatsApp: rejected (refund failed) ──────────────────
+        _notifyRejected(restaurantId, failed, reason);
+
         return res.status(200).json({
           success: true,
           message: "Order rejected, but refund failed. Please retry the refund.",
@@ -615,6 +742,9 @@ const rejectOrder = async (req, res) => {
     emitToRestaurant(restaurantId, "order_status_updated", {
       orderId: order._id, status: "REJECTED", rejectedAt: order.rejectedAt, rejectionReason: reason,
     });
+
+    // ── WhatsApp: rejected (non-online / non-paid) ─────────────
+    _notifyRejected(restaurantId, order, reason);
 
     return res.status(200).json({ success: true, message: "Order rejected successfully", data: order });
   } catch (error) {

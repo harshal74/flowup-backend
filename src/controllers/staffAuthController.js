@@ -7,6 +7,7 @@ const {
   recordStaffLogin,
   recordStaffLoginFailed,
 } = require("../services/loginActivityService");
+const { emitToRestaurant } = require("../socket");
 
 const EMAIL_RE  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const { isValidMobile, normalizeMobile, MOBILE_ERROR_MESSAGE } = require("../utils/validateMobile");
@@ -100,6 +101,15 @@ exports.signup = async (req, res) => {
         existing.reviewedAt = null;
         await existing.save();
 
+        // Notify admins of this restaurant about the re-registration request
+        emitToRestaurant(restaurantId.trim(), "staff_registration_request", {
+          staffId:   existing._id,
+          name:      existing.name,
+          email:     existing.email,
+          role:      existing.role,
+          createdAt: existing.updatedAt || new Date().toISOString(),
+        });
+
         return res.status(200).json({
           success: true,
           message: "Registration request submitted successfully. Your request is waiting for administrator approval.",
@@ -113,7 +123,7 @@ exports.signup = async (req, res) => {
     // ── Create PENDING staff registration request ─────────────
     const hashed = await bcrypt.hash(password, 10);
 
-    await Staff.create({
+    const staff = await Staff.create({
       restaurantId:    restaurantId.trim(),
       name:            name.trim(),
       email:           normEmail,
@@ -123,6 +133,18 @@ exports.signup = async (req, res) => {
       status:          "PENDING",
       isActive:        false,
       isEmailVerified: false,
+    });
+
+    // Notify admins of this restaurant about the new registration request.
+    // The restaurantId is the backend-validated value from the Setting lookup
+    // above — never the raw client input. This ensures the event is emitted
+    // only to the correct restaurant room.
+    emitToRestaurant(restaurantId.trim(), "staff_registration_request", {
+      staffId:   staff._id,
+      name:      staff.name,
+      email:     staff.email,
+      role:      staff.role,
+      createdAt: staff.createdAt,
     });
 
     return res.status(201).json({

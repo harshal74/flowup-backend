@@ -91,6 +91,23 @@ const settingSchema = new mongoose.Schema(
       default: "INR",
     },
 
+    // Restaurant/application country context (ISO 3166-1 alpha-2, e.g. "IN",
+    // "US", "GB"). Used to normalize customer national phone numbers to E.164
+    // for WhatsApp without guessing a country. Default "IN" preserves the
+    // existing India-first behavior for all current restaurants; it is NOT a
+    // hardcoded assumption in the WhatsApp transport — new restaurants set
+    // their own country. Distinct from RestaurantWhatsApp.countryCode, which
+    // is the WhatsApp/Meta phone-number country (they usually agree but serve
+    // different purposes; not auto-synced in this phase).
+    countryCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "IN",
+      // ISO 3166-1 alpha-2: exactly two letters. Rejects "IND", "91", "+91".
+      match: [/^[A-Z]{2}$/, "countryCode must be an ISO 3166-1 alpha-2 code (e.g. IN, US, GB)."],
+    },
+
     feedbackEnabled: {
       type: Boolean,
       default: true,
