@@ -277,6 +277,17 @@ const orderSchema = new mongoose.Schema(
       maxlength: 128,
     },
 
+    // ── Inventory (Step 3) ─────────────────────────────────────────
+    // Set true exactly once, atomically, when raw-material deduction has been
+    // committed for this order's COMPLETED transition. Prevents duplicate/
+    // concurrent completion requests from deducting inventory twice. Existing
+    // historical COMPLETED orders keep the default false and are NEVER
+    // retroactively deducted (deduction only runs during a new transition).
+    inventoryDeducted: {
+      type: Boolean,
+      default: false,
+    },
+
     preparedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Staff",

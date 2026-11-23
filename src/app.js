@@ -21,6 +21,11 @@ const restaurantsRoutes      = require("./routes/restaurants.route");
 const tableReservationRoutes = require("./routes/tableReservation.route");
 const adminTableReservationRoutes = require("./routes/adminTableReservation.route");
 const metaOnboardingRoutes        = require("./routes/metaOnboarding.route");
+const inventoryRoutes             = require("./routes/inventory.route");
+const notificationRoutes          = require("./routes/notification.route");
+const financialRoutes             = require("./routes/financial.route");
+const tableCleanRoutes            = require("./routes/tableClean.route");
+const staffTableOrderRoutes       = require("./routes/staffTableOrder.route");
 
 const app = express();
 
@@ -108,6 +113,13 @@ app.use("/api/restaurants",          restaurantsRoutes);
 app.use("/api/table-reservations",         tableReservationRoutes);
 app.use("/api/admin/table-reservations",   adminTableReservationRoutes);
 app.use("/api/whatsapp/meta",              metaOnboardingRoutes);
+app.use("/api/inventory",                  inventoryRoutes);
+app.use("/api/notifications",              notificationRoutes);
+app.use("/api/financials",                 financialRoutes);
+app.use("/api/table-cleaning",             tableCleanRoutes.staffRouter);
+app.use("/api/admin/table-cleaning",       tableCleanRoutes.adminRouter);
+app.use("/api/table-orders",               staffTableOrderRoutes.staffRouter);
+app.use("/api/admin/table-orders",         staffTableOrderRoutes.adminRouter);
 
 // ── 404 handler for unknown API routes ────────────────────────────
 app.use("/api/{*path}", (req, res) => {

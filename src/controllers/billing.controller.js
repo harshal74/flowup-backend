@@ -8,6 +8,7 @@ const mongoose       = require("mongoose");
 const { sendBillWhatsApp }   = require("../services/whatsapp.service");
 const { emitToRestaurant }   = require("../socket");
 const { logActivity }        = require("../services/staffActivityService");
+const { markTableDirtyIfSettled } = require("../services/tableClean.service");
 
 /**
  * Escape a user-supplied string for safe use inside a MongoDB $regex.
@@ -269,6 +270,16 @@ exports.confirmPayment = async (req, res) => {
         .populate("customerId", "name mobile")
         .select("_id orderNumber totalAmount subtotalAmount items customerId tableNumber createdAt")
         .lean();
+
+      // ── Table cleaning: mark the table DIRTY once its dine-in orders are
+      // completed + paid and nothing else is using it. Idempotent, never throws,
+      // and ignored for non-dine-in bills (orders are validated inside).
+      await markTableDirtyIfSettled({
+        restaurantId,
+        tableNumber,
+        orderIds: bill.orderIds,
+        billId:   bill._id,
+      });
 
       // ── If no more unpaid orders remain at this table, resolve waiter requests ──
       if (remainingOrders.length === 0) {

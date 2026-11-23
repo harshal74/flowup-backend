@@ -53,7 +53,7 @@ const TEMPLATE_REGISTRY = Object.freeze({
   },
   ORDER_ACCEPTED: {
     event: "ORDER_ACCEPTED",
-    templateName: "flowup_order_accepted",
+    templateName: "order_accepted",
     category: "UTILITY",
     language: { code: DEFAULT_LANGUAGE },
     parameterSchema: [
@@ -75,7 +75,7 @@ const TEMPLATE_REGISTRY = Object.freeze({
   },
   OUT_FOR_DELIVERY: {
     event: "OUT_FOR_DELIVERY",
-    templateName: "flowup_out_for_delivery",
+    templateName: "order_out_for_delivery",
     category: "UTILITY",
     language: { code: DEFAULT_LANGUAGE },
     parameterSchema: [
@@ -85,7 +85,7 @@ const TEMPLATE_REGISTRY = Object.freeze({
   },
   DELIVERED: {
     event: "DELIVERED",
-    templateName: "flowup_delivered",
+    templateName: "order_completed",
     category: "UTILITY",
     language: { code: DEFAULT_LANGUAGE },
     parameterSchema: [
@@ -106,7 +106,7 @@ const TEMPLATE_REGISTRY = Object.freeze({
   },
   BILL: {
     event: "BILL",
-    templateName: "flowup_bill",
+    templateName: "send_bill",
     category: "UTILITY",
     language: { code: DEFAULT_LANGUAGE },
     parameterSchema: [

@@ -8,6 +8,7 @@ const {
   buildOutForDeliveryMessage,
   buildDeliveredMessage,
 } = require("../services/whatsapp.service");
+const { deductInventoryForOrder } = require("../services/inventoryDeduction.service");
 
 // ── WhatsApp notify helper (Phase 18) — fire-and-forget ──────────
 // Sends OUT_FOR_DELIVERY / DELIVERED notifications after a successful staff
@@ -121,6 +122,15 @@ async function transitionOrder(req, res, { fromStatus, toStatus, staffField, act
     // The status guard above (order.status !== fromStatus → 409) already
     // prevents duplicate sends on repeated calls for the same transition.
     _notifyStaffTransition(restaurantId, order._id, notifyEvent);
+
+    // ── Inventory: deduct raw materials on ACCEPTED ───────────────
+    // Deduction now fires when the order is accepted (not on completion).
+    // Fire-and-forget: the service is idempotent (atomic claim) and fully
+    // self-contained. It NEVER throws to here.
+    if (toStatus === "ACCEPTED") {
+      deductInventoryForOrder(order._id)
+        .catch((err) => console.error("[Inventory] deduction hook error:", err && err.message));
+    }
 
     return res.status(200).json({
       success: true,

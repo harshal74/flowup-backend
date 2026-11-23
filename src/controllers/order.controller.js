@@ -13,6 +13,7 @@ const {
   buildOrderAcceptedMessage,
   buildOrderRejectedMessage,
 } = require("../services/whatsapp.service");
+const { deductInventoryForOrder } = require("../services/inventoryDeduction.service");
 
 /**
  * Generate a high-entropy order number.
@@ -535,6 +536,12 @@ const acceptOrder = async (req, res) => {
       acceptedAt: order.acceptedAt,
     });
 
+    // ── Inventory: deduct raw materials on ACCEPTED ────────────────
+    // Deduction now fires at accept time (not completion). Same fire-and-forget
+    // pattern as the staff path — idempotent, never throws to here.
+    deductInventoryForOrder(order._id)
+      .catch((err) => console.error("[Inventory] deduction hook error:", err && err.message));
+
     // ── WhatsApp: accepted — DELIVERY only ─────────────────────
     // For DINE_IN / TAKE_AWAY the customer is already in the restaurant;
     // an accepted notification adds no value and creates noise.
@@ -800,6 +807,14 @@ const updateOrderStatus = async (req, res) => {
       status: order.status,
       completedAt: order.completedAt || null,
     });
+
+    // ── Inventory: deduct raw materials on ACCEPTED ───────────────
+    // Deduction now fires at accept time (not completion). Fire-and-forget;
+    // idempotent; never alters the API response.
+    if (status === "ACCEPTED") {
+      deductInventoryForOrder(order._id)
+        .catch((err) => console.error("[Inventory] deduction hook error:", err && err.message));
+    }
 
     return res.status(200).json({ success: true, message: "Order status updated successfully", data: order });
   } catch (error) {
