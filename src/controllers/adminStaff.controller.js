@@ -225,6 +225,7 @@ exports.createStaff = async (req, res) => {
     if (!EMAIL_RE.test(email.trim())) {
       return res.status(400).json({ success: false, message: "Invalid email format" });
     }
+    //hh
     if (!isValidMobile(mobile)) {
       return res.status(400).json({ success: false, message: MOBILE_ERROR_MESSAGE });
     }
