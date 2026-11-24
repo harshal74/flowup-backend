@@ -61,7 +61,8 @@ exports.submitEnquiry = async (req, res) => {
 
     // ── 3. Email notification (fail gracefully — DB save already done) ──
     try {
-      await sendEnquiryEmail(payload);
+      // emailService expects `restaurant`; the stored lead field is `restaurantName`.
+      await sendEnquiryEmail({ ...payload, restaurant: payload.restaurantName });
     } catch (emailErr) {
       // Email failure must NOT cause the submission to fail.
       // The lead is already in the database.
