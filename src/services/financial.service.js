@@ -117,14 +117,6 @@ function resolveRange(preset, customStart, customEnd, offset) {
       return { start, end, label: `${fmtShort(start)} – ${fmtShort(end)}` };
     }
 
-    case "total": {
-      // All-time: no date filter. Return epoch start → end of today so the
-      // calling queries include every historical record.  offset is ignored.
-      const start = new Date(0); // 1970-01-01T00:00:00Z — predates any FlowUp record
-      const end = endOfDay(now);
-      return { start, end, label: "All Time" };
-    }
-
     default:
       return { error: "Invalid date range preset" };
   }

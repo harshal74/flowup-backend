@@ -1,4 +1,5 @@
 const Menu     = require("../models/Menu");
+const Category = require("../models/Category");
 const mongoose = require("mongoose");
 
 // Helper: validate ObjectId and return 400 if invalid
@@ -119,6 +120,11 @@ const getAdminMenus = async (req, res) => {
   }
 };
 
+// IDs of this restaurant's inactive categories. Items in these categories are
+// hidden from every customer/staff-facing menu query (admin list is unaffected).
+const getInactiveCategoryIds = (restaurantId) =>
+  Category.find({ restaurantId, isActive: false }).distinct("_id");
+
 const getPublicMenus = async (req, res) => {
   try {
     const restaurantId = req.restaurantId;
@@ -127,7 +133,13 @@ const getPublicMenus = async (req, res) => {
       return res.status(400).json({ success: false, message: "restaurantId is required" });
     }
 
-    const menus = await Menu.find({ restaurantId, isAvailable: true })
+    const inactiveCategoryIds = await getInactiveCategoryIds(restaurantId);
+
+    const menus = await Menu.find({
+      restaurantId,
+      isAvailable: true,
+      ...(inactiveCategoryIds.length ? { categoryId: { $nin: inactiveCategoryIds } } : {}),
+    })
       .populate("categoryId", "name")
       .sort({ displayOrder: 1 });
 
@@ -148,9 +160,14 @@ const getMenuById = async (req, res) => {
       return res.status(400).json({ success: false, message: "restaurantId is required" });
     }
 
-    const menu = await Menu.findOne({ _id: req.params.id, restaurantId }).populate("categoryId", "name");
+    const menu = await Menu.findOne({ _id: req.params.id, restaurantId }).populate("categoryId", "name isActive");
 
     if (!menu) {
+      return res.status(404).json({ success: false, message: "Menu item not found" });
+    }
+
+    // Items in an inactive category are hidden everywhere on the public side.
+    if (menu.categoryId && menu.categoryId.isActive === false) {
       return res.status(404).json({ success: false, message: "Menu item not found" });
     }
 
@@ -169,6 +186,11 @@ const getMenusByCategory = async (req, res) => {
 
     if (!restaurantId) {
       return res.status(400).json({ success: false, message: "restaurantId is required" });
+    }
+
+    const inactiveCategoryIds = await getInactiveCategoryIds(restaurantId);
+    if (inactiveCategoryIds.some(id => String(id) === String(categoryId))) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
     }
 
     const menus = await Menu.find({ categoryId, restaurantId, isAvailable: true });

@@ -249,6 +249,13 @@ exports.confirmPayment = async (req, res) => {
     // Mark all orders on this bill as PAID
     await Order.updateMany({ _id: { $in: bill.orderIds } }, { $set: { paymentStatus: "PAID" } });
 
+    // Let live dashboards count this revenue without a reload (dedicated event,
+    // so existing order_status_updated listeners are unaffected).
+    emitToRestaurant(restaurantId, "order_payment_updated", {
+      orderIds: bill.orderIds.map(String),
+      paymentStatus: "PAID",
+    });
+
     // ── Check for remaining unpaid eligible orders at the same table ──
     // Eligible = COMPLETED + paymentStatus PENDING + no billId + same table + not just-paid
     let remainingOrders = [];
