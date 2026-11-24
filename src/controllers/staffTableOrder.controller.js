@@ -103,6 +103,7 @@ exports.createStaffDineInOrder = async (req, res) => {
 
     // Hand over to the existing order pipeline with trusted values only.
     req.restaurantId = restaurantId;
+    req.staffTableOrder = true; // staff-authenticated: skips the guest QR session check
     req.body = {
       orderType: "DINE_IN",
       tableNumber,

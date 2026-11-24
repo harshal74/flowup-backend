@@ -26,6 +26,7 @@ const notificationRoutes          = require("./routes/notification.route");
 const financialRoutes             = require("./routes/financial.route");
 const tableCleanRoutes            = require("./routes/tableClean.route");
 const staffTableOrderRoutes       = require("./routes/staffTableOrder.route");
+const tableRoutes                 = require("./routes/table.route");
 
 const app = express();
 
@@ -120,6 +121,8 @@ app.use("/api/table-cleaning",             tableCleanRoutes.staffRouter);
 app.use("/api/admin/table-cleaning",       tableCleanRoutes.adminRouter);
 app.use("/api/table-orders",               staffTableOrderRoutes.staffRouter);
 app.use("/api/admin/table-orders",         staffTableOrderRoutes.adminRouter);
+app.use("/api/tables",                     tableRoutes.adminRouter);
+app.use("/api/public/tables",              tableRoutes.publicRouter);
 
 // ── 404 handler for unknown API routes ────────────────────────────
 app.use("/api/{*path}", (req, res) => {

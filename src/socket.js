@@ -53,6 +53,16 @@ function initSocket(httpServer, allowedOrigins) {
     let restaurantId;
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+      // Guest table sessions (customer QR scans) share the JWT secret but
+      // must never join a restaurant room — it carries every order and
+      // customer's details. Only admin/staff tokens may connect.
+      if (decoded.type === "GUEST_TABLE") {
+        socket.emit("error", { message: "Not allowed" });
+        socket.disconnect(true);
+        return;
+      }
+
       const tokenRestaurantId = decoded.restaurantId;
 
       // Fail closed: a token with no restaurantId claim cannot join any room.

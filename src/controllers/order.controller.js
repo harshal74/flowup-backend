@@ -14,6 +14,7 @@ const {
   buildOrderRejectedMessage,
 } = require("../services/whatsapp.service");
 const { deductInventoryForOrder } = require("../services/inventoryDeduction.service");
+const { verifyGuestTableRequest } = require("../services/table.service");
 
 /**
  * Generate a high-entropy order number.
@@ -89,12 +90,33 @@ function _notifyRejected(restaurantId, order, reason) {
 // ─────────────────────────────────────────────────────────────────
 const createOrder = async (req, res) => {
   try {
-    const { orderType, tableNumber, customer, items, note, address, deliveryLocation } = req.body;
+    const { orderType, customer, items, note, address, deliveryLocation } = req.body;
+    let tableNumber = req.body.tableNumber;
 
     // Use validated restaurantId from resolvePublicRestaurant middleware
     const restaurantId = req.restaurantId;
     if (!restaurantId) {
       return res.status(400).json({ success: false, message: "Restaurant context is required." });
+    }
+
+    // ── Dine-in: table comes ONLY from a guest table session ────
+    // Customer dine-in orders must carry the GUEST_TABLE JWT issued when the
+    // table's QR code was scanned. The table number in the body is ignored.
+    // Staff orders (/api/table-orders) are authenticated separately and set
+    // req.staffTableOrder after validating the table themselves.
+    if (orderType === "DINE_IN" && !req.staffTableOrder) {
+      const session = await verifyGuestTableRequest(req);
+      if (!session.ok) {
+        return res.status(session.status).json({ success: false, code: session.code, message: session.message });
+      }
+      if (session.restaurantId !== restaurantId) {
+        return res.status(403).json({
+          success: false,
+          code: "TABLE_SESSION_MISMATCH",
+          message: "This table session belongs to a different restaurant. Please scan the QR code on your table again.",
+        });
+      }
+      tableNumber = session.tableNumber;
     }
 
     // ── Shop open/closed check ─────────────────────────────────

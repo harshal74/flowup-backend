@@ -2,6 +2,7 @@ const Setting          = require("../models/Setting");
 const Order            = require("../models/Order");
 const TableReservation = require("../models/TableReservation");
 const { isSupportedCountry } = require("../utils/phoneE164");
+const { ensureTablesForRestaurant } = require("../services/table.service");
 
 // Get Settings
 const getSettings = async (req, res) => {
@@ -181,6 +182,16 @@ const updateSettings = async (req, res) => {
       { ...allowedUpdates, restaurantId },
       { upsert: true, returnDocument: 'after', runValidators: true }
     );
+
+    // Keep Table documents (and their QR tokens) in sync with the table count.
+    // Failure here must not fail the settings save; GET /api/tables re-syncs.
+    if (allowedUpdates.totalTables !== undefined) {
+      try {
+        await ensureTablesForRestaurant(restaurantId, settings.totalTables);
+      } catch (syncErr) {
+        console.error("[Tables] sync after settings update failed:", syncErr.message);
+      }
+    }
 
     // ── FIX: Strip platform-private fields before returning to restaurant admin ──
     // subscriptionAmount, suspendedBy, and deletedAt are platform-only data.
