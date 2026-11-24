@@ -15,6 +15,7 @@ const {
 } = require("../services/whatsapp.service");
 const { deductInventoryForOrder } = require("../services/inventoryDeduction.service");
 const { verifyGuestTableRequest } = require("../services/table.service");
+const { withTrackingToken } = require("../utils/orderTracking");
 
 /**
  * Generate a high-entropy order number.
@@ -197,7 +198,7 @@ const createOrder = async (req, res) => {
         return res.status(200).json({
           success: true,
           message: "Order already placed",
-          data: existingOrder,
+          data: withTrackingToken(existingOrder),
         });
       }
     }
@@ -368,7 +369,8 @@ const createOrder = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Order placed successfully",
-      data: populatedOrder,
+      // trackingToken lets ONLY this customer open the order status page
+      data: withTrackingToken(populatedOrder),
     });
   } catch (error) {
     // Handle MongoDB E11000 duplicate key on idempotencyKey — race condition
@@ -385,7 +387,7 @@ const createOrder = async (req, res) => {
           return res.status(200).json({
             success: true,
             message: "Order already placed",
-            data: existing,
+            data: withTrackingToken(existing),
           });
         }
       }

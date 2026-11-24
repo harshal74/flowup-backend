@@ -27,6 +27,7 @@ const financialRoutes             = require("./routes/financial.route");
 const tableCleanRoutes            = require("./routes/tableClean.route");
 const staffTableOrderRoutes       = require("./routes/staffTableOrder.route");
 const tableRoutes                 = require("./routes/table.route");
+const orderTrackingRoutes         = require("./routes/orderTracking.route");
 
 const app = express();
 
@@ -70,7 +71,8 @@ app.use(cors({
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  // x-order-token: customer order-status page; x-table-session: guest table session
+  allowedHeaders: ["Content-Type", "Authorization", "x-order-token", "x-table-session"],
 }));
 
 app.use(express.json({
@@ -123,6 +125,7 @@ app.use("/api/table-orders",               staffTableOrderRoutes.staffRouter);
 app.use("/api/admin/table-orders",         staffTableOrderRoutes.adminRouter);
 app.use("/api/tables",                     tableRoutes.adminRouter);
 app.use("/api/public/tables",              tableRoutes.publicRouter);
+app.use("/api/public/orders",              orderTrackingRoutes);
 
 // ── 404 handler for unknown API routes ────────────────────────────
 app.use("/api/{*path}", (req, res) => {

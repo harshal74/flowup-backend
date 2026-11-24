@@ -24,6 +24,7 @@ const {
 } = require("../services/whatsapp.service");
 const { emitToRestaurant } = require("../socket");
 const { validateDeliveryLocation } = require("../utils/validateLocation");
+const { withTrackingToken } = require("../utils/orderTracking");
 
 const INTENT_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -226,7 +227,7 @@ exports.createPaymentOrder = async (req, res) => {
         // If order was already created from this intent, return the order
         if (existing.status === "ORDER_CREATED" && existing.orderId) {
           const order = await Order.findById(existing.orderId).populate("customerId", "name mobile address");
-          if (order) return res.status(200).json({ success: true, message: "Order already placed", data: order, alreadyPaid: true });
+          if (order) return res.status(200).json({ success: true, message: "Order already placed", data: withTrackingToken(order), alreadyPaid: true });
         }
         // Return existing intent's Razorpay order for frontend to reopen checkout
         return res.status(200).json({
@@ -353,7 +354,7 @@ exports.verifyAndCreateOrder = async (req, res) => {
       const completed = await PaymentIntent.findOne({ razorpayOrderId: razorpay_order_id, status: "ORDER_CREATED" });
       if (completed?.orderId) {
         const order = await Order.findById(completed.orderId).populate("customerId", "name mobile address");
-        if (order) return res.status(200).json({ success: true, message: "Order already placed", data: order });
+        if (order) return res.status(200).json({ success: true, message: "Order already placed", data: withTrackingToken(order) });
       }
       return res.status(400).json({ success: false, message: "Payment intent not found or already processed." });
     }
@@ -373,7 +374,7 @@ exports.verifyAndCreateOrder = async (req, res) => {
       const existing = await PaymentIntent.findById(intent._id);
       if (existing?.orderId) {
         const order = await Order.findById(existing.orderId).populate("customerId", "name mobile address");
-        if (order) return res.status(200).json({ success: true, message: "Order already placed", data: order });
+        if (order) return res.status(200).json({ success: true, message: "Order already placed", data: withTrackingToken(order) });
       }
       return res.status(409).json({ success: false, message: "Order already being created." });
     }
@@ -396,7 +397,7 @@ exports.verifyAndCreateOrder = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Payment verified and order placed successfully.",
-      data: order,
+      data: withTrackingToken(order),
     });
   } catch (error) {
     console.error("[Payment] verifyAndCreateOrder error:", error.message);
