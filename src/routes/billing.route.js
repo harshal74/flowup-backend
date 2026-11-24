@@ -8,6 +8,8 @@ const {
   getUnpaidOrders,
   generateBill,
   confirmPayment,
+  splitBill,
+  confirmSplitPayment,
   cancelBill,
   getBillHistory,
   getBillById,
@@ -29,14 +31,31 @@ function adminOrStaff(req, res, next) {
   });
 }
 
+/**
+ * Billing changes (generate / split / confirm / cancel) are limited to the
+ * roles that see Billing in the apps: restaurant admins (admin JWT) and staff
+ * with role ADMIN or WAITER. CHEF and ASSISTANT get 403. Read-only routes
+ * stay open to any authenticated staff.
+ */
+const BILLING_STAFF_ROLES = ["ADMIN", "WAITER"];
+function requireBillingRole(req, res, next) {
+  if (req.staff && !BILLING_STAFF_ROLES.includes(req.staff.role)) {
+    return res.status(403).json({ success: false, message: "Only admins and waiters can manage bills." });
+  }
+  next();
+}
+const canBill = [adminOrStaff, requireBillingRole];
+
 // Static routes first (before /:billId)
 router.get("/orders",   adminOrStaff, getUnpaidOrders);
-router.post("/generate", adminOrStaff, generateBill);
+router.post("/generate", ...canBill, generateBill);
 router.get("/history",  adminOrStaff, getBillHistory);
 
 // Parameterised routes
-router.patch("/:billId/confirm", adminOrStaff, confirmPayment);
-router.delete("/:billId",        adminOrStaff, cancelBill);
-router.get("/:billId",           adminOrStaff, getBillById);
+router.patch("/:billId/confirm",                 ...canBill, confirmPayment);
+router.patch("/:billId/split",                   ...canBill, splitBill);
+router.patch("/:billId/splits/:splitId/confirm", ...canBill, confirmSplitPayment);
+router.delete("/:billId",                        ...canBill, cancelBill);
+router.get("/:billId",                           adminOrStaff, getBillById);
 
 module.exports = router;

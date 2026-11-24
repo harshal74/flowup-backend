@@ -9,6 +9,7 @@ const { sendBillWhatsApp }   = require("../services/whatsapp.service");
 const { emitToRestaurant }   = require("../socket");
 const { logActivity }        = require("../services/staffActivityService");
 const { markTableDirtyIfSettled } = require("../services/tableClean.service");
+const { buildSplits, toP, fromP, PAYMENT_METHODS } = require("../services/billSplit.service");
 
 /**
  * Escape a user-supplied string for safe use inside a MongoDB $regex.
@@ -108,7 +109,21 @@ exports.generateBill = async (req, res) => {
       return res.status(400).json({ success: false, message: "Some selected orders are already billed or invalid." });
     }
 
-    const tableNumber = orders[0].tableNumber ?? null;
+    // One bill = one table. Dine-in orders can't be mixed with other tables
+    // or with takeaway/delivery orders (counter bills may combine non-dine-in orders).
+    const hasDineIn = orders.some(o => o.orderType === "DINE_IN");
+    if (hasDineIn) {
+      const tables = new Set(orders.map(o => (o.orderType === "DINE_IN" ? o.tableNumber : "non-dine-in")));
+      if (tables.size !== 1) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          success: false,
+          message: "All dine-in orders on a bill must be from the same table. Bill each table separately.",
+        });
+      }
+    }
+
+    const tableNumber = hasDineIn ? orders[0].tableNumber : (orders[0].tableNumber ?? null);
 
     let rawSubtotal = 0;
     const items = [];
@@ -143,8 +158,27 @@ exports.generateBill = async (req, res) => {
       return res.status(400).json({ success: false, message: "Discount cannot exceed subtotal + GST." });
     }
 
+    // ── Optional split at generation time (omitted / "NONE" = single payment) ──
+    const splitType = req.body.splitType || "NONE";
+    let splits = [];
+    if (splitType !== "NONE") {
+      const built = buildSplits(
+        { items, subtotal, sgst, cgst, discount, grandTotal },
+        { splitType, splits: req.body.splits, splitCount: req.body.splitCount, defaultMethod: paymentMethod }
+      );
+      if (built.error) {
+        await session.abortTransaction();
+        return res.status(400).json({ success: false, message: built.error });
+      }
+      splits = built.splits;
+    }
+
     // Create bill inside transaction
     const [bill] = await Bill.create([{
+      splitType,
+      splits,
+      paidAmount: 0,
+      remainingAmount: grandTotal,
       restaurantId,
       tableNumber,
       orderIds,
@@ -222,30 +256,58 @@ exports.generateBill = async (req, res) => {
 };
 
 // ── PATCH /api/billing/:billId/confirm ──────────────────────────
+// Single-payment bills only. Split bills are settled split by split.
 exports.confirmPayment = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
     const { billId } = req.params;
+    if (!mongoose.isValidObjectId(billId)) {
+      return res.status(404).json({ success: false, message: "Bill not found." });
+    }
 
     // FIX H3: Atomic findOneAndUpdate — only transitions from "Pending" to "Paid".
     // Two simultaneous requests will race; the second will find no document matching
     // paymentStatus: "Pending" and receive a clean 400 "already confirmed" response.
-    const bill = await Bill.findOneAndUpdate(
-      { _id: billId, restaurantId, paymentStatus: "Pending" },
+    let bill = await Bill.findOneAndUpdate(
+      { _id: billId, restaurantId, paymentStatus: "Pending", splitType: { $in: [null, "NONE"] } },
       { $set: { paymentStatus: "Paid", paidAt: new Date() } },
       { new: true }
     );
+    if (bill) {
+      // Settlement totals (only this request reached here, so a plain update is safe)
+      bill = await Bill.findByIdAndUpdate(
+        bill._id,
+        { $set: { paidAmount: bill.grandTotal, remainingAmount: 0 } },
+        { new: true }
+      );
+    }
 
     if (!bill) {
-      // Either the bill does not belong to this restaurant, or it was already confirmed.
-      // Distinguish the two cases for a better error message.
-      const exists = await Bill.findOne({ _id: billId, restaurantId }).select("paymentStatus").lean();
+      // Not this restaurant's bill, already confirmed, or a split bill.
+      const exists = await Bill.findOne({ _id: billId, restaurantId }).select("paymentStatus splitType").lean();
       if (!exists) {
         return res.status(404).json({ success: false, message: "Bill not found." });
+      }
+      if (exists.paymentStatus === "Pending" && exists.splitType && exists.splitType !== "NONE") {
+        return res.status(409).json({ success: false, message: "This bill is split. Confirm each person's payment separately." });
       }
       return res.status(400).json({ success: false, message: "Bill already confirmed." });
     }
 
+    const settlement = await settlePaidBill(req, restaurantId, bill);
+    return res.status(200).json({ success: true, message: "Payment confirmed.", bill, ...settlement });
+  } catch (error) {
+    console.error("Confirm Payment Error:", error);
+    return res.status(500).json({ success: false, message: "Failed to confirm payment." });
+  }
+};
+
+/**
+ * Everything that happens once a bill is fully paid (single payment or the
+ * last split): orders → PAID, revenue event, waiter requests closed, ARRIVED
+ * reservation completed, table marked dirty. Returns the response extras.
+ */
+async function settlePaidBill(req, restaurantId, bill) {
     // Mark all orders on this bill as PAID
     await Order.updateMany({ _id: { $in: bill.orderIds } }, { $set: { paymentStatus: "PAID" } });
 
@@ -382,10 +444,7 @@ exports.confirmPayment = async (req, res) => {
       }
     }
 
-    return res.status(200).json({
-      success: true,
-      message: "Payment confirmed.",
-      bill,
+    return {
       // remainingOrders: orders at the same table still unpaid after this payment.
       // Empty array = table is fully settled.
       // items are included so the frontend can show order details in the popup.
@@ -410,25 +469,188 @@ exports.confirmPayment = async (req, res) => {
       // was automatically completed after all dine-in orders were paid.
       // null when no ARRIVED reservation existed or remaining orders still exist.
       reservationCompleted,
-    });
+    };
+}
+
+// ── PATCH /api/billing/:billId/split ────────────────────────────
+// Split (or re-split / un-split with splitType "NONE") a Pending bill.
+// Not allowed once any split has been paid.
+exports.splitBill = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const { billId } = req.params;
+    if (!mongoose.isValidObjectId(billId)) {
+      return res.status(404).json({ success: false, message: "Bill not found." });
+    }
+
+    const bill = await Bill.findOne({ _id: billId, restaurantId });
+    if (!bill) return res.status(404).json({ success: false, message: "Bill not found." });
+    if (bill.paymentStatus !== "Pending") {
+      return res.status(400).json({ success: false, message: "Only unpaid bills can be split." });
+    }
+    if ((bill.splits || []).some((s) => s.paymentStatus === "Paid")) {
+      return res.status(409).json({ success: false, message: "Some people have already paid. This split can no longer be changed." });
+    }
+
+    const splitType = req.body?.splitType || "NONE";
+    let update;
+    if (splitType === "NONE") {
+      update = { splitType: "NONE", splits: [], paidAmount: 0, remainingAmount: bill.grandTotal };
+    } else {
+      const built = buildSplits(bill, {
+        splitType,
+        splits: req.body?.splits,
+        splitCount: req.body?.splitCount,
+        defaultMethod: bill.paymentMethod,
+      });
+      if (built.error) return res.status(400).json({ success: false, message: built.error });
+      update = { splitType, splits: built.splits, paidAmount: 0, remainingAmount: bill.grandTotal };
+    }
+
+    // Conditional write: fails if a split was paid since we read the bill.
+    const updated = await Bill.findOneAndUpdate(
+      { _id: bill._id, restaurantId, paymentStatus: "Pending", "splits.paymentStatus": { $ne: "Paid" } },
+      { $set: update },
+      { new: true, runValidators: true }
+    );
+    if (!updated) {
+      return res.status(409).json({ success: false, message: "The bill changed while splitting. Please reopen it and try again." });
+    }
+
+    return res.status(200).json({ success: true, message: splitType === "NONE" ? "Split removed." : "Bill split.", bill: updated });
   } catch (error) {
-    console.error("Confirm Payment Error:", error);
-    return res.status(500).json({ success: false, message: "Failed to confirm payment." });
+    console.error("[Billing] splitBill error:", error.message);
+    return res.status(500).json({ success: false, message: "Failed to split bill." });
   }
 };
+
+// ── PATCH /api/billing/:billId/splits/:splitId/confirm ──────────
+// Body: { paymentMethod: "Cash" | "UPI" | "Card" }
+// Marks one person's share as paid. When the last share is paid the bill and
+// its orders become Paid and the normal table settlement runs.
+exports.confirmSplitPayment = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const { billId, splitId } = req.params;
+    if (!mongoose.isValidObjectId(billId) || !mongoose.isValidObjectId(splitId)) {
+      return res.status(404).json({ success: false, message: "Split not found." });
+    }
+    const paymentMethod = req.body?.paymentMethod;
+    if (paymentMethod !== undefined && !PAYMENT_METHODS.includes(paymentMethod)) {
+      return res.status(400).json({ success: false, message: "Invalid payment method." });
+    }
+
+    const current = await Bill.findOne({ _id: billId, restaurantId }).lean();
+    if (!current) return res.status(404).json({ success: false, message: "Bill not found." });
+    const split = (current.splits || []).find((s) => String(s._id) === String(splitId));
+    if (!split) return res.status(404).json({ success: false, message: "Split not found." });
+    if (current.paymentStatus !== "Pending") {
+      return res.status(400).json({ success: false, message: "This bill is already fully paid." });
+    }
+
+    // Atomic: only a Pending split can become Paid (two staff tapping at once → one wins)
+    const now = new Date();
+    const updated = await Bill.findOneAndUpdate(
+      {
+        _id: billId,
+        restaurantId,
+        paymentStatus: "Pending",
+        splits: { $elemMatch: { _id: splitId, paymentStatus: "Pending" } },
+      },
+      {
+        $set: {
+          "splits.$.paymentStatus": "Paid",
+          "splits.$.paidAt": now,
+          "splits.$.paymentMethod": paymentMethod || split.paymentMethod || "Cash",
+        },
+      },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(400).json({ success: false, message: `${split.label || "This split"} is already paid.` });
+    }
+
+    // Recompute progress from the stored splits (in paise, so it never drifts)
+    const paidP = updated.splits.filter((s) => s.paymentStatus === "Paid").reduce((t, s) => t + toP(s.amount), 0);
+    const allPaid = updated.splits.every((s) => s.paymentStatus === "Paid");
+
+    if (!allPaid) {
+      const progressed = await Bill.findOneAndUpdate(
+        { _id: billId, restaurantId, paymentStatus: "Pending" },
+        { $set: { paidAmount: fromP(paidP), remainingAmount: fromP(toP(updated.grandTotal) - paidP) } },
+        { new: true }
+      );
+      emitBillProgress(restaurantId, progressed || updated);
+      return res.status(200).json({
+        success: true,
+        message: `${split.label || "Split"} paid.`,
+        bill: progressed || updated,
+        billPaid: false,
+      });
+    }
+
+    // Last split: flip the whole bill to Paid exactly once
+    const paidBill = await Bill.findOneAndUpdate(
+      { _id: billId, restaurantId, paymentStatus: "Pending", "splits.paymentStatus": { $ne: "Pending" } },
+      { $set: { paymentStatus: "Paid", paidAt: now, paidAmount: updated.grandTotal, remainingAmount: 0 } },
+      { new: true }
+    );
+    if (!paidBill) {
+      // A concurrent request finished the bill first; it ran the settlement.
+      const latest = await Bill.findById(billId);
+      return res.status(200).json({ success: true, message: "Bill fully paid.", bill: latest, billPaid: true });
+    }
+
+    const settlement = await settlePaidBill(req, restaurantId, paidBill);
+    emitBillProgress(restaurantId, paidBill);
+    return res.status(200).json({
+      success: true,
+      message: "All splits paid. Bill closed.",
+      bill: paidBill,
+      billPaid: true,
+      ...settlement,
+    });
+  } catch (error) {
+    console.error("[Billing] confirmSplitPayment error:", error.message);
+    return res.status(500).json({ success: false, message: "Failed to confirm split payment." });
+  }
+};
+
+function emitBillProgress(restaurantId, bill) {
+  if (!bill) return;
+  emitToRestaurant(restaurantId, "bill_updated", {
+    billId: String(bill._id),
+    tableNumber: bill.tableNumber ?? null,
+    paymentStatus: bill.paymentStatus,
+    paidAmount: bill.paidAmount ?? 0,
+    remainingAmount: bill.remainingAmount ?? bill.grandTotal,
+  });
+}
 
 // ── DELETE /api/billing/:billId ─────────────────────────────────
 exports.cancelBill = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
     const { billId } = req.params;
+    if (!mongoose.isValidObjectId(billId)) {
+      return res.status(404).json({ success: false, message: "Bill not found." });
+    }
 
     const bill = await Bill.findOne({ _id: billId, restaurantId });
     if (!bill) return res.status(404).json({ success: false, message: "Bill not found." });
     if (bill.paymentStatus === "Paid") return res.status(400).json({ success: false, message: "Cannot cancel a paid bill." });
+    if ((bill.splits || []).some((s) => s.paymentStatus === "Paid")) {
+      return res.status(400).json({ success: false, message: "Some people have already paid this bill, so it can't be cancelled." });
+    }
 
+    // Atomic delete: only while nothing is paid (guards against a split being paid right now)
+    const deleted = await Bill.findOneAndDelete({
+      _id: billId, restaurantId, paymentStatus: "Pending", "splits.paymentStatus": { $ne: "Paid" },
+    });
+    if (!deleted) {
+      return res.status(409).json({ success: false, message: "The bill changed. Please reopen it and try again." });
+    }
     await Order.updateMany({ _id: { $in: bill.orderIds } }, { $set: { billId: null } });
-    await Bill.findByIdAndDelete(billId);
 
     return res.status(200).json({ success: true, message: "Bill cancelled." });
   } catch (error) {
