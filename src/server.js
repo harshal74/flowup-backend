@@ -26,6 +26,8 @@ connectDB();
 // missing, Meta outbound stays BLOCKED while Twilio + the app keep working.
 mongoose.connection.once("open", () => {
   runWhatsAppStartupCheck().catch(() => { /* never disturb startup */ });
+  // WhatsApp reminders 1 hour before reservations (checks every 5 minutes)
+  require("./services/reservationNotify.service").startReservationReminderScheduler();
 });
 
 // Wrap Express in a plain HTTP server so Socket.IO can share port 5000

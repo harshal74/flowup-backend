@@ -27,6 +27,7 @@ const Setting          = require("../models/Setting");
 const { emitToRestaurant } = require("../socket");
 const { logActivity }      = require("../services/staffActivityService");
 const { isValidMobile, normalizeMobile, MOBILE_ERROR_MESSAGE } = require("../utils/validateMobile");
+const { sendReservationConfirmation } = require("../services/reservationNotify.service");
 
 // IST offset: UTC+5:30 = 330 minutes
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -263,6 +264,10 @@ exports.createReservation = async (req, res) => {
     // ── Socket ─────────────────────────────────────────────────
     emitReservationEvent(restaurantId, "table_reservation_created", reservation);
 
+    // ── WhatsApp confirmation (fire-and-forget, never fails the request) ──
+    sendReservationConfirmation(reservation._id)
+      .catch((err) => console.error("[Reservation WhatsApp] confirmation error:", err.message));
+
     // ── Audit log ──────────────────────────────────────────────
     logActivity({
       staff:      req.staff,
@@ -447,6 +452,8 @@ exports.updateReservation = async (req, res) => {
 
       updates.reservationStart = start;
       updates.reservationEnd   = end;
+      // New time → the 1-hour reminder should be sent again for the new slot
+      updates.reminderSentAt   = null;
     }
 
     if (Object.keys(updates).length === 0) {

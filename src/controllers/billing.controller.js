@@ -251,6 +251,7 @@ exports.generateBill = async (req, res) => {
 
     // Commit — both bill + order updates succeed atomically
     await session.commitTransaction();
+    emitBillProgress(restaurantId, bill, "generated");
 
     const customerMobile = orders[0].customerId?.mobile || "";
     const customerName   = orders[0].customerId?.name   || "";
@@ -342,6 +343,7 @@ exports.confirmPayment = async (req, res) => {
     }
 
     const settlement = await settlePaidBill(req, restaurantId, bill);
+    emitBillProgress(restaurantId, bill, "paid");
     return res.status(200).json({ success: true, message: "Payment confirmed.", bill, ...settlement });
   } catch (error) {
     console.error("Confirm Payment Error:", error);
@@ -564,6 +566,7 @@ exports.splitBill = async (req, res) => {
       return res.status(409).json({ success: false, message: "The bill changed while splitting. Please reopen it and try again." });
     }
 
+    emitBillProgress(restaurantId, updated, "split");
     return res.status(200).json({ success: true, message: splitType === "NONE" ? "Split removed." : "Bill split.", bill: updated });
   } catch (error) {
     console.error("[Billing] splitBill error:", error.message);
@@ -649,7 +652,7 @@ exports.confirmSplitPayment = async (req, res) => {
     }
 
     const settlement = await settlePaidBill(req, restaurantId, paidBill);
-    emitBillProgress(restaurantId, paidBill);
+    emitBillProgress(restaurantId, paidBill, "paid");
     return res.status(200).json({
       success: true,
       message: "All splits paid. Bill closed.",
@@ -663,14 +666,22 @@ exports.confirmSplitPayment = async (req, res) => {
   }
 };
 
-function emitBillProgress(restaurantId, bill) {
+/**
+ * Live billing event for all admin/staff screens.
+ * action: "generated" | "split" | "progress" | "paid" | "cancelled"
+ */
+function emitBillProgress(restaurantId, bill, action = "progress") {
   if (!bill) return;
   emitToRestaurant(restaurantId, "bill_updated", {
     billId: String(bill._id),
+    action,
     tableNumber: bill.tableNumber ?? null,
-    paymentStatus: bill.paymentStatus,
+    orderIds: (bill.orderIds || []).map((o) => String(o?._id || o)),
+    paymentStatus: action === "cancelled" ? "Cancelled" : bill.paymentStatus,
+    splitType: bill.splitType || "NONE",
     paidAmount: bill.paidAmount ?? 0,
     remainingAmount: bill.remainingAmount ?? bill.grandTotal,
+    grandTotal: bill.grandTotal,
   });
 }
 
@@ -698,6 +709,7 @@ exports.cancelBill = async (req, res) => {
       return res.status(409).json({ success: false, message: "The bill changed. Please reopen it and try again." });
     }
     await Order.updateMany({ _id: { $in: bill.orderIds } }, { $set: { billId: null } });
+    emitBillProgress(restaurantId, bill, "cancelled");
 
     return res.status(200).json({ success: true, message: "Bill cancelled." });
   } catch (error) {
@@ -710,7 +722,7 @@ exports.cancelBill = async (req, res) => {
 exports.getBillHistory = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
-    const { page = 1, limit = 50 } = req.query;
+    const { page = 1, limit = 50, from, to, table, invoice, status } = req.query;
 
     // FIX M5: Cap limit to prevent unbounded queries.
     const requestedLimit = Number(limit);
@@ -718,16 +730,37 @@ exports.getBillHistory = async (req, res) => {
       ? Math.min(requestedLimit, 200)
       : 50;
 
-    const skip  = (Number(page) - 1) * effectiveLimit;
-    const total = await Bill.countDocuments({ restaurantId });
+    const safePage = Math.max(Number(page) || 1, 1);
+    const skip  = (safePage - 1) * effectiveLimit;
 
-    const bills = await Bill.find({ restaurantId })
+    const filter = { restaurantId };
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    const range = {};
+    if (typeof from === "string" && dateRe.test(from)) {
+      const d = new Date(`${from}T00:00:00+05:30`);
+      if (!isNaN(d.getTime())) range.$gte = d;
+    }
+    if (typeof to === "string" && dateRe.test(to)) {
+      const d = new Date(`${to}T23:59:59.999+05:30`);
+      if (!isNaN(d.getTime())) range.$lte = d;
+    }
+    if (Object.keys(range).length) filter.createdAt = range;
+    if (table !== undefined && table !== "" && Number.isInteger(Number(table))) filter.tableNumber = Number(table);
+    if (typeof invoice === "string" && invoice.trim()) {
+      const esc = invoice.trim().slice(0, 40).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.invoiceNumber = { $regex: esc, $options: "i" };
+    }
+    if (status === "Paid" || status === "Pending") filter.paymentStatus = status;
+
+    const total = await Bill.countDocuments(filter);
+
+    const bills = await Bill.find(filter)
       .populate({ path: "orderIds", populate: { path: "customerId", select: "name mobile" } })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(effectiveLimit);
 
-    return res.status(200).json({ success: true, count: bills.length, total, page: Number(page), limit: effectiveLimit, bills });
+    return res.status(200).json({ success: true, count: bills.length, total, page: safePage, limit: effectiveLimit, bills });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ success: false, message: "Failed to fetch bill history." });

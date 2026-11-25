@@ -562,12 +562,16 @@ const acceptOrder = async (req, res) => {
 
     order.status = "ACCEPTED";
     order.acceptedAt = new Date();
+    // Optional preparation time (minutes) shown on the customer's status page
+    const eta = Number(req.body?.estimatedTime);
+    if (Number.isInteger(eta) && eta >= 1 && eta <= 240) order.estimatedTime = eta;
     await order.save();
 
     emitToRestaurant(order.restaurantId, "order_status_updated", {
       orderId: order._id,
       status: order.status,
       acceptedAt: order.acceptedAt,
+      estimatedTime: order.estimatedTime ?? null,
     });
 
     // ── Inventory: deduct raw materials on ACCEPTED ────────────────

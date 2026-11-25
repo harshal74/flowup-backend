@@ -63,6 +63,13 @@ function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
 }
 
+/** Preparation time in whole minutes (1–240), or null if missing/invalid. */
+function parseEstimatedTime(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 240 ? n : null;
+}
+
 // ── Shared order transition helper ───────────────────────────────
 async function transitionOrder(req, res, { fromStatus, toStatus, staffField, action, notifyEvent }) {
   try {
@@ -93,6 +100,11 @@ async function transitionOrder(req, res, { fromStatus, toStatus, staffField, act
     if (staffField)             order[staffField] = req.staff._id;
     if (toStatus === "COMPLETED") order.completedAt = new Date();
     if (toStatus === "ACCEPTED")  order.acceptedAt  = new Date();
+    // Optional preparation time chosen by the chef (minutes, shown to the customer)
+    if (toStatus === "ACCEPTED") {
+      const eta = parseEstimatedTime(req.body?.estimatedTime);
+      if (eta) order.estimatedTime = eta;
+    }
 
     await order.save();
 
@@ -105,6 +117,7 @@ async function transitionOrder(req, res, { fromStatus, toStatus, staffField, act
       servedBy:    order.servedBy    || null,
       completedAt: order.completedAt || null,
       acceptedAt:  order.acceptedAt  || null,
+      estimatedTime: order.estimatedTime ?? null,
     });
 
     // Async audit log — fire-and-forget, never blocks response

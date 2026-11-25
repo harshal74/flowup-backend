@@ -1,11 +1,50 @@
 const WaiterRequest = require("../models/WaiterRequest");
 const Setting       = require("../models/Setting");
+const Order         = require("../models/Order");
+const { verifyGuestTableRequest } = require("../services/table.service");
+const { verifyTrackingToken }     = require("../utils/orderTracking");
 const { emitToRestaurant } = require("../socket");
 
 // ── Create (public — called by customer) ─────────────────────────
+/**
+ * Work out which table the customer is really at. The table number in the
+ * request body is NOT trusted. Accepted proof:
+ *   1. the guest table session from scanning the table QR (Authorization), or
+ *   2. a dine-in order placed on this device (orderNumber + x-order-token).
+ */
+async function resolveCustomerTable(req, restaurantId) {
+  const session = await verifyGuestTableRequest(req);
+  if (session.ok) {
+    if (session.restaurantId !== restaurantId) {
+      return { ok: false, status: 403, message: "This table session belongs to a different restaurant." };
+    }
+    return { ok: true, tableNumber: session.tableNumber, orderId: null };
+  }
+
+  const orderNumber = typeof req.body?.orderNumber === "string" ? req.body.orderNumber.trim() : "";
+  const token = req.headers["x-order-token"];
+  if (orderNumber && typeof token === "string" && token) {
+    const order = await Order.findOne({ orderNumber, restaurantId, orderType: "DINE_IN" })
+      .select("_id tableNumber status")
+      .lean();
+    if (order && order.tableNumber && !["REJECTED", "CANCELLED"].includes(order.status) &&
+        verifyTrackingToken(order, token)) {
+      return { ok: true, tableNumber: order.tableNumber, orderId: order._id };
+    }
+  }
+
+  return {
+    ok: false,
+    status: session.status || 401,
+    code: session.code,
+    message: "Please scan the QR code on your table to call a waiter.",
+  };
+}
+
 const createWaiterRequest = async (req, res) => {
   try {
-    const { tableNumber, customerName, orderId } = req.body;
+    const { customerName } = req.body;
+    const requestType = req.body.requestType === "BILL" ? "BILL" : "WAITER";
 
     // Use validated restaurantId from resolvePublicRestaurant middleware
     const restaurantId = req.restaurantId;
@@ -13,41 +52,47 @@ const createWaiterRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: "Restaurant context is required." });
     }
 
-    if (!tableNumber || tableNumber < 1) {
-      return res.status(400).json({ success: false, message: "Table number is required" });
+    const proof = await resolveCustomerTable(req, restaurantId);
+    if (!proof.ok) {
+      return res.status(proof.status).json({ success: false, code: proof.code, message: proof.message });
     }
+    const tableNumber = proof.tableNumber;
 
-    // SECURITY FIX: validate tableNumber does not exceed restaurant's totalTables.
-    // Without this, a customer can submit tableNumber=999 for a non-existent table.
+    // Defensive: table must still exist under the configured count
     const settings = await Setting.findOne({ restaurantId }).select("totalTables").lean();
     const maxTables = settings?.totalTables || 10;
-    if (Number(tableNumber) > maxTables) {
+    if (tableNumber > maxTables) {
       return res.status(400).json({
         success: false,
         message: `Table number must be between 1 and ${maxTables}.`,
       });
     }
 
-    // Block duplicate requests within 5 minutes from the same table + restaurant
+    // Block duplicate requests of the same kind within 5 minutes from the same table.
+    // Legacy records (no requestType) count as WAITER.
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
     const existing = await WaiterRequest.findOne({
       restaurantId, tableNumber, status: "PENDING",
       createdAt: { $gte: fiveMinutesAgo },
+      ...(requestType === "BILL" ? { requestType: "BILL" } : { requestType: { $ne: "BILL" } }),
     });
 
     if (existing) {
       return res.status(429).json({
         success: false,
-        message: "A waiter request for this table is already active. Please wait.",
+        message: requestType === "BILL"
+          ? "You have already asked for the bill. A staff member is on the way."
+          : "A waiter request for this table is already active. Please wait.",
       });
     }
 
     const request = await WaiterRequest.create({
       restaurantId,
       tableNumber,
-      customerName: customerName || "",
-      orderId: orderId || null,
+      customerName: typeof customerName === "string" ? customerName.trim().slice(0, 80) : "",
+      orderId: proof.orderId || null,
       status: "PENDING",
+      requestType,
     });
 
     // Emit to admin room — _id as string so frontend dedup works
@@ -57,10 +102,15 @@ const createWaiterRequest = async (req, res) => {
       tableNumber:  request.tableNumber,
       customerName: request.customerName,
       status:       request.status,
+      requestType:  request.requestType,
       createdAt:    request.createdAt.toISOString(),
     });
 
-    return res.status(201).json({ success: true, message: "Waiter request sent", data: request });
+    return res.status(201).json({
+      success: true,
+      message: requestType === "BILL" ? "Bill requested" : "Waiter request sent",
+      data: request,
+    });
   } catch (error) {
     console.error("Create Waiter Request Error:", error);
     return res.status(500).json({ success: false, message: "Internal server error" });

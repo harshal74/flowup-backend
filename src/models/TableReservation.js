@@ -94,6 +94,17 @@ const tableReservationSchema = new mongoose.Schema(
       required: true,
     },
 
+    // WhatsApp reminder bookkeeping (set atomically so a reminder is sent once)
+    confirmationSentAt: {
+      type: Date,
+      default: null,
+    },
+
+    reminderSentAt: {
+      type: Date,
+      default: null,
+    },
+
     status: {
       type: String,
       // ACTIVE kept for V1 backward compatibility — treated as RESERVED by controllers

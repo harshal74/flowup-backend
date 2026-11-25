@@ -34,6 +34,11 @@ const cleanupTimer = setInterval(() => {
 }, 5 * 60 * 1000);
 cleanupTimer.unref();
 
+// Each limiter instance gets a unique namespace so two different endpoints
+// never share one bucket. Without this, a busy status-polling client could
+// exhaust a completely unrelated login/feedback limit (same key = req.ip).
+let limiterSeq = 0;
+
 /**
  * Create a rate-limit middleware.
  *
@@ -45,13 +50,14 @@ cleanupTimer.unref();
  */
 function rateLimit({ windowMs = 60000, max = 10, message, keyGenerator } = {}) {
   const msg = message || "Too many requests. Please try again later.";
+  const ns = `L${++limiterSeq}`;
 
   return (req, res, next) => {
-    // Derive the rate-limit key.
-    // req.ip is set correctly when trust proxy is configured (app.set("trust proxy", 1)).
-    const key = keyGenerator
-      ? keyGenerator(req)
-      : req.ip || "unknown";
+    // Derive the rate-limit key — namespaced per limiter instance so that
+    // separate endpoints never share one bucket (e.g., status polling
+    // exhausting the feedback rate limit).
+    const ipKey = keyGenerator ? keyGenerator(req) : (req.ip || "unknown");
+    const key = `${ns}:${ipKey}`;
 
     const now = Date.now();
     let entry = store.get(key);

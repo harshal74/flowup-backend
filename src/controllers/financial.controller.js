@@ -252,7 +252,97 @@ const deleteExpense = async (req, res) => {
   }
 };
 
+// ── CSV helpers ─────────────────────────────────────────────────
+// Quote every cell; neutralise spreadsheet formula injection (= + - @ tab CR).
+function csvCell(v) {
+  let s = v === null || v === undefined ? "" : String(v);
+  if (typeof v !== "number" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+function csvRow(cells) {
+  return cells.map(csvCell).join(",");
+}
+function istStamp(d) {
+  if (!d) return "";
+  return new Date(d).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: false });
+}
+
+// ── GET /api/financials/export ──────────────────────────────────
+// Query: type=sales|expenses|summary, plus same range params as /summary.
+const exportCsv = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const { type = "summary", range, start, end, offset } = req.query;
+    if (!["sales", "expenses", "summary"].includes(type)) {
+      return res.status(400).json({ success: false, message: "type must be sales, expenses or summary" });
+    }
+
+    const resolved = financialService.resolveRange(range || "month", start, end, offset);
+    if (resolved.error) {
+      return res.status(400).json({ success: false, message: resolved.error });
+    }
+
+    const lines = [];
+    if (type === "sales") {
+      const Order = require("../models/Order");
+      const orders = await Order.find({
+        restaurantId,
+        status: "COMPLETED",
+        paymentStatus: "PAID",
+        createdAt: { $gte: resolved.start, $lte: resolved.end },
+      })
+        .sort({ createdAt: 1 })
+        .select("orderNumber orderType tableNumber totalAmount paymentMethod createdAt")
+        .limit(20000)
+        .lean();
+      lines.push(csvRow(["Date (IST)", "Order No", "Type", "Table", "Payment", "Amount"]));
+      let sum = 0;
+      for (const o of orders) {
+        sum += o.totalAmount || 0;
+        lines.push(csvRow([istStamp(o.createdAt), o.orderNumber, o.orderType, o.tableNumber ?? "", o.paymentMethod || "", (o.totalAmount || 0).toFixed(2)]));
+      }
+      lines.push(csvRow(["", "", "", "", "Total", sum.toFixed(2)]));
+    } else if (type === "expenses") {
+      const expenses = await Expense.find({
+        restaurantId,
+        expenseDate: { $gte: resolved.start, $lte: resolved.end },
+      })
+        .sort({ expenseDate: 1 })
+        .limit(20000)
+        .lean();
+      lines.push(csvRow(["Date", "Category", "Description", "Notes", "Amount"]));
+      let sum = 0;
+      for (const e of expenses) {
+        sum += e.amount || 0;
+        lines.push(csvRow([istStamp(e.expenseDate).split(",")[0], e.category, e.description || "", e.notes || "", (e.amount || 0).toFixed(2)]));
+      }
+      lines.push(csvRow(["", "", "", "Total", sum.toFixed(2)]));
+    } else {
+      const s = await financialService.computeSummary(restaurantId, resolved.start, resolved.end, resolved.label);
+      lines.push(csvRow(["Metric", "Value"]));
+      lines.push(csvRow(["Period", s.label || resolved.label]));
+      const flat = (obj, prefix = "") => {
+        for (const [k, v] of Object.entries(obj || {})) {
+          if (k === "label" || k === "start" || k === "end") continue;
+          if (v && typeof v === "object" && !Array.isArray(v)) flat(v, `${prefix}${k}.`);
+          else if (!Array.isArray(v)) lines.push(csvRow([`${prefix}${k}`, v]));
+        }
+      };
+      flat(s);
+    }
+
+    const fileName = `${type}-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    return res.status(200).send("\uFEFF" + lines.join("\r\n"));
+  } catch (error) {
+    console.error("Financials Export Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 module.exports = {
+  exportCsv,
   getSummary,
   listExpenses,
   createExpense,

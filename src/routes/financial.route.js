@@ -1,5 +1,6 @@
 const express = require("express");
 const {
+  exportCsv,
   getSummary,
   listExpenses,
   createExpense,
@@ -19,6 +20,9 @@ const router = express.Router();
 
 // P&L summary for a date range (revenue, COGS, gross/net profit, margin, breakdown).
 router.get("/summary", protect, getSummary);
+
+// CSV export (sales / expenses / summary) for a date range.
+router.get("/export", protect, exportCsv);
 
 // Expense CRUD (tenant-scoped, admin-only).
 router.get("/expenses", protect, listExpenses);

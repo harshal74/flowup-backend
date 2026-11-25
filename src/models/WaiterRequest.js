@@ -33,6 +33,14 @@ const waiterRequestSchema = new mongoose.Schema(
       default: "PENDING",
     },
 
+    // WAITER = "call waiter"; BILL = customer asked for the bill.
+    // Legacy records have no value and are treated as WAITER.
+    requestType: {
+      type: String,
+      enum: ["WAITER", "BILL"],
+      default: "WAITER",
+    },
+
     // Staff reference — who resolved this request
     resolvedBy: {
       type: mongoose.Schema.Types.ObjectId,
