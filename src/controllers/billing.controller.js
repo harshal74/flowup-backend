@@ -67,6 +67,53 @@ exports.getUnpaidOrders = async (req, res) => {
   }
 };
 
+// ── GET /api/billing/pending ────────────────────────────────────
+// Bills generated but not fully paid (incl. split bills with some shares
+// still unpaid), so staff can reopen them after a reload / from another device.
+exports.getPendingBills = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+
+    const [bills, settings] = await Promise.all([
+      Bill.find({ restaurantId, paymentStatus: "Pending" })
+        .populate({ path: "orderIds", select: "orderNumber customerId", populate: { path: "customerId", select: "name mobile" } })
+        .sort({ createdAt: 1 })
+        .limit(100)
+        .lean(),
+      Setting.findOne({ restaurantId }).select("restaurantName upiId gstEnabled sgstRate cgstRate").lean(),
+    ]);
+
+    const data = bills.map((b) => {
+      const firstCustomer = (b.orderIds || []).find((o) => o && o.customerId)?.customerId;
+      return {
+        ...b,
+        orderIds: (b.orderIds || []).map((o) => String(o?._id || o)),
+        orderNumbers: (b.orderIds || []).map((o) => o?.orderNumber).filter(Boolean),
+        paidAmount: b.paidAmount ?? 0,
+        remainingAmount: b.remainingAmount ?? b.grandTotal,
+        customer: { name: firstCustomer?.name || "", mobile: firstCustomer?.mobile || "" },
+      };
+    });
+
+    const gstEnabled = settings?.gstEnabled ?? false;
+    return res.status(200).json({
+      success: true,
+      count: data.length,
+      bills: data,
+      paymentSettings: {
+        upiId: settings?.upiId || "",
+        restaurantName: settings?.restaurantName || "FlowUp Restaurant",
+        gstEnabled,
+        sgstRate: gstEnabled ? (settings?.sgstRate ?? 0) : 0,
+        cgstRate: gstEnabled ? (settings?.cgstRate ?? 0) : 0,
+      },
+    });
+  } catch (error) {
+    console.error("[Billing] getPendingBills error:", error.message);
+    return res.status(500).json({ success: false, message: "Failed to fetch pending bills." });
+  }
+};
+
 // ── POST /api/billing/generate ──────────────────────────────────
 exports.generateBill = async (req, res) => {
   const session = await mongoose.startSession();

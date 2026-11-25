@@ -6,6 +6,7 @@ const { tryStaffAuthMiddleware } = staffAuth;
 
 const {
   getUnpaidOrders,
+  getPendingBills,
   generateBill,
   confirmPayment,
   splitBill,
@@ -50,6 +51,7 @@ const canBill = [adminOrStaff, requireBillingRole];
 router.get("/orders",   adminOrStaff, getUnpaidOrders);
 router.post("/generate", ...canBill, generateBill);
 router.get("/history",  adminOrStaff, getBillHistory);
+router.get("/pending",  adminOrStaff, getPendingBills); // must stay before /:billId
 
 // Parameterised routes
 router.patch("/:billId/confirm",                 ...canBill, confirmPayment);
