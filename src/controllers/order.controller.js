@@ -14,7 +14,7 @@ const {
   buildOrderRejectedMessage,
 } = require("../services/whatsapp.service");
 const { deductInventoryForOrder } = require("../services/inventoryDeduction.service");
-const { verifyGuestTableRequest } = require("../services/table.service");
+const { verifyGuestTableRequest, findBlockingReservation } = require("../services/table.service");
 const { withTrackingToken } = require("../utils/orderTracking");
 
 /**
@@ -118,6 +118,16 @@ const createOrder = async (req, res) => {
         });
       }
       tableNumber = session.tableNumber;
+
+      // A session opened before a reservation started can't order during it.
+      const reservation = await findBlockingReservation(restaurantId, tableNumber);
+      if (reservation) {
+        return res.status(409).json({
+          success: false,
+          code: "TABLE_RESERVED",
+          message: `This table is reserved for ${reservation.guestName} right now. Please ask the staff for help.`,
+        });
+      }
     }
 
     // ── Shop open/closed check ─────────────────────────────────

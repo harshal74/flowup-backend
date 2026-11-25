@@ -131,7 +131,29 @@ async function verifyGuestTableRequest(req) {
   return { ok: true, restaurantId: decoded.restaurantId, tableNumber: decoded.tableNumber };
 }
 
+/**
+ * Reservation holding this table right now (guests not yet arrived).
+ * RESERVED (and legacy ACTIVE) whose window covers "now". ARRIVED does not
+ * block — those guests are seated. Legacy records without a time window block.
+ */
+async function findBlockingReservation(restaurantId, tableNumber) {
+  const TableReservation = require("../models/TableReservation");
+  const now = new Date();
+  return TableReservation.findOne({
+    restaurantId,
+    tableNumber,
+    status: { $in: ["RESERVED", "ACTIVE"] },
+    $or: [
+      { reservationStart: null },
+      { reservationStart: { $lte: now }, reservationEnd: { $gt: now } },
+    ],
+  })
+    .select("guestName reservationStart reservationEnd")
+    .lean();
+}
+
 module.exports = {
+  findBlockingReservation,
   GUEST_TABLE_TYPE,
   GUEST_TOKEN_TTL_MS,
   generateQrToken,

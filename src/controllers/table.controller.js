@@ -13,6 +13,7 @@ const {
   ensureTablesForRestaurant,
   regenerateTableQr,
   signGuestTableToken,
+  findBlockingReservation,
 } = require("../services/table.service");
 
 const serialize = (t) => ({
@@ -84,6 +85,22 @@ exports.resolveTable = async (req, res) => {
     }
     if (settings.expiresAt && new Date() >= new Date(settings.expiresAt)) {
       return res.status(403).json({ success: false, message: "This restaurant is currently unavailable.", expired: true });
+    }
+
+    // Reserved right now and the guests haven't arrived → don't open the menu.
+    const reservation = await findBlockingReservation(table.restaurantId, table.tableNumber);
+    if (reservation) {
+      return res.status(409).json({
+        success: false,
+        code: "TABLE_RESERVED",
+        message: `This table is reserved for ${reservation.guestName}.`,
+        data: {
+          tableNumber: table.tableNumber,
+          guestName: reservation.guestName,
+          reservationStart: reservation.reservationStart || null,
+          reservationEnd: reservation.reservationEnd || null,
+        },
+      });
     }
 
     const guestToken = signGuestTableToken({
