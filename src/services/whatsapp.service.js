@@ -367,6 +367,32 @@ function buildOrderRejectedMessage({ orderNumber, restaurantName, reason }) {
   );
 }
 
+function buildOrderReadyMessage({ orderNumber, restaurantName, orderType }) {
+  if (orderType === "DELIVERY") {
+    return (
+      `🍽️ Order Ready for Pickup!\n\n` +
+      `Order No   : #${orderNumber}\n` +
+      `Restaurant : ${restaurantName}\n\n` +
+      `Your order is packed and ready. Our delivery partner will pick it up shortly! 🚴`
+    );
+  }
+  if (orderType === "TAKE_AWAY") {
+    return (
+      `✅ Ready for Collection!\n\n` +
+      `Order No   : #${orderNumber}\n` +
+      `Restaurant : ${restaurantName}\n\n` +
+      `Your order is ready. Please collect it from the counter. Thank you! 🙏`
+    );
+  }
+  // DINE_IN — notify the customer their food is at the table
+  return (
+    `🍽️ Your Food is Ready!\n\n` +
+    `Order No   : #${orderNumber}\n` +
+    `Restaurant : ${restaurantName}\n\n` +
+    `Your order has been served. Enjoy your meal! 😊`
+  );
+}
+
 function buildOutForDeliveryMessage({ orderNumber, restaurantName }) {
   return (
     `🚴 On the Way!\n\n` +
@@ -482,6 +508,7 @@ module.exports = {
   buildOrderAcceptedMessage,
   buildOrderRejectedMessage,
   buildOutForDeliveryMessage,
+  buildOrderReadyMessage,
   buildDeliveredMessage,
   buildPaymentConfirmedMessage,
   buildBillMessage,

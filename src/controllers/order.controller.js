@@ -890,6 +890,39 @@ const updateOrderStatus = async (req, res) => {
         .catch((err) => console.error("[Inventory] deduction hook error:", err && err.message));
     }
 
+    // ── WhatsApp: order ready notification ───────────────────────
+    // Notify the customer when admin marks an order READY.
+    // Fire-and-forget — never blocks the response.
+    if (status === "READY") {
+      const { buildOrderReadyMessage } = require("../services/whatsapp.service");
+      Setting.findOne({ restaurantId })
+        .select("restaurantName whatsappNotificationsEnabled countryCode")
+        .lean()
+        .then(async (settings) => {
+          if (settings?.whatsappNotificationsEnabled === false) return;
+          const populated = await Order.findById(order._id).populate("customerId", "mobile name").lean();
+          const mobile = populated?.customerId?.mobile;
+          if (!mobile) return;
+          return sendOrderStatusWhatsApp({
+            mobile,
+            countryContext: settings?.countryCode,
+            body: buildOrderReadyMessage({
+              orderNumber: order.orderNumber,
+              restaurantName: settings?.restaurantName || "FlowUp Restaurant",
+              orderType: order.orderType,
+            }),
+            event: "order_ready",
+            logContext: {
+              restaurantId,
+              customerId: populated?.customerId?._id,
+              orderId: order._id,
+              countryCode: settings?.countryCode,
+            },
+          });
+        })
+        .catch(err => console.error("[WhatsApp] ready notify error:", err.message));
+    }
+
     return res.status(200).json({ success: true, message: "Order status updated successfully", data: order });
   } catch (error) {
     console.error("Update Status Error:", error);

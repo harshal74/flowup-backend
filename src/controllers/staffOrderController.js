@@ -7,6 +7,7 @@ const {
   sendOrderStatusWhatsApp,
   buildOutForDeliveryMessage,
   buildDeliveredMessage,
+  buildOrderReadyMessage,
 } = require("../services/whatsapp.service");
 const { deductInventoryForOrder } = require("../services/inventoryDeduction.service");
 
@@ -44,6 +45,13 @@ function _notifyStaffTransition(restaurantId, orderId, notifyEvent) {
               ...common,
               body: buildOutForDeliveryMessage({ orderNumber: order.orderNumber, restaurantName }),
               event: "out_for_delivery",
+            });
+          }
+          if (notifyEvent === "ready") {
+            return sendOrderStatusWhatsApp({
+              ...common,
+              body: buildOrderReadyMessage({ orderNumber: order.orderNumber, restaurantName, orderType: order.orderType }),
+              event: "order_ready",
             });
           }
           if (notifyEvent === "delivered") {
@@ -220,6 +228,7 @@ exports.readyOrder = (req, res) =>
     toStatus:   "READY",
     staffField: null,
     action:     "Marked Ready",
+    notifyEvent: "ready",   // WhatsApp: order is ready for collection / served
   });
 
 // ── PATCH /api/staff/orders/:id/deliver ──────────────────────────
