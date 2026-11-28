@@ -248,6 +248,13 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Table occupancy tracking — when the first order at a dine-in table was
+    // accepted (seatedAt) so admins can see how long a table has been occupied.
+    seatedAt: {
+      type: Date,
+      default: null,
+    },
+
     cancellationReason: {
       type: String,
       default: "",

@@ -100,11 +100,23 @@ const paymentIntentSchema = new mongoose.Schema({
   expiresAt: {
     type: Date,
     required: true,
-    index: true,
+    // TTL index: MongoDB auto-deletes CREATED intents ~1 hour after they expire.
+    // ORDER_CREATED / PAID / REFUNDED records are retained for audit purposes.
+    // The partial filter means only genuinely abandoned intents are removed.
   },
 }, {
   timestamps: true,
 });
+
+// TTL: automatically remove abandoned (CREATED) intents 3600 seconds after expiresAt.
+// Paid/completed intents are kept indefinitely for audit.
+paymentIntentSchema.index(
+  { expiresAt: 1 },
+  {
+    expireAfterSeconds: 3600,
+    partialFilterExpression: { status: "CREATED" },
+  }
+);
 
 // Compound index for idempotency lookup
 paymentIntentSchema.index(

@@ -127,6 +127,7 @@ app.use("/api/tables",                     tableRoutes.adminRouter);
 app.use("/api/public/tables",              tableRoutes.publicRouter);
 app.use("/api/public/orders",              orderTrackingRoutes);
 app.use("/api/feedback",                   require("./routes/feedback.route"));
+app.use("/api/loyalty",                    require("./routes/loyalty.route"));
 
 // ── 404 handler for unknown API routes ────────────────────────────
 app.use("/api/{*path}", (req, res) => {

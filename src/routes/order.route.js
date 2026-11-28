@@ -9,6 +9,8 @@ const {
   acceptOrder,
   rejectOrder,
   updateOrderStatus,
+  updateEstimatedTime,
+  dispatchDeliveryOrder,
 } = require("../controllers/order.controller");
 
 const protect = require("../middleware/auth.middleware");
@@ -132,6 +134,20 @@ router.patch(
   "/:id/status",
   protect,
   updateOrderStatus
+);
+
+// Update estimated prep time on an already-accepted order (admin only)
+router.patch(
+  "/:id/estimated-time",
+  protect,
+  updateEstimatedTime
+);
+
+// Dispatch a READY delivery order to OUT_FOR_DELIVERY (admin path)
+router.patch(
+  "/:id/dispatch",
+  protect,
+  dispatchDeliveryOrder
 );
 
 module.exports = router;

@@ -6,6 +6,7 @@ const {
   getTopSellingItems,
   getOrderStatusStats,
   getDashboardAnalytics,
+  getItemSalesReport,
 } = require("../controllers/dashboard.controller");
 
 const protect = require("../middleware/auth.middleware");
@@ -40,6 +41,12 @@ router.get(
   "/analytics",
   protect,
   getDashboardAnalytics
+);
+
+router.get(
+  "/item-sales",
+  protect,
+  getItemSalesReport
 );
 
 module.exports = router;

@@ -292,13 +292,30 @@ const createOrder = async (req, res) => {
       }
 
       const price = menuItem.discountedPrice || menuItem.price;
-      const subtotal = price * item.quantity;
+
+      // Apply selected modifiers — price comes from the DB, never from client
+      let modifierExtra = 0;
+      const selectedModifiers = [];
+      if (Array.isArray(item.modifiers) && item.modifiers.length > 0) {
+        for (const modReq of item.modifiers) {
+          const dbMod = (menuItem.modifiers || []).find(
+            (m) => m._id.toString() === String(modReq.id) && m.isAvailable !== false
+          );
+          if (dbMod) {
+            modifierExtra += dbMod.price;
+            selectedModifiers.push({ id: dbMod._id, name: dbMod.name, price: dbMod.price });
+          }
+        }
+      }
+
+      const unitPrice = price + modifierExtra;
+      const subtotal = unitPrice * item.quantity;
 
       orderItems.push({
         menuId: menuItem._id,
         name: menuItem.name,
         image: menuItem.image,
-        price,
+        price: unitPrice,
         quantity: item.quantity,
         subtotal,
         itemNote: item.itemNote || "",
@@ -565,12 +582,15 @@ const acceptOrder = async (req, res) => {
     // Optional preparation time (minutes) shown on the customer's status page
     const eta = Number(req.body?.estimatedTime);
     if (Number.isInteger(eta) && eta >= 1 && eta <= 240) order.estimatedTime = eta;
+    // Track when a dine-in table was first occupied
+    if (order.orderType === "DINE_IN" && !order.seatedAt) order.seatedAt = new Date();
     await order.save();
 
     emitToRestaurant(order.restaurantId, "order_status_updated", {
-      orderId: order._id,
-      status: order.status,
-      acceptedAt: order.acceptedAt,
+      orderId:       order._id,
+      status:        order.status,
+      acceptedAt:    order.acceptedAt,
+      seatedAt:      order.seatedAt || null,
       estimatedTime: order.estimatedTime ?? null,
     });
 
@@ -837,13 +857,29 @@ const updateOrderStatus = async (req, res) => {
 
     order.status = status;
     if (status === "COMPLETED") order.completedAt = new Date();
+    if (status === "ACCEPTED")  order.acceptedAt  = new Date();
+
+    // seatedAt: set once when a DINE_IN order is first accepted.
+    if (status === "ACCEPTED" && order.orderType === "DINE_IN" && !order.seatedAt) {
+      order.seatedAt = new Date();
+    }
+
+    // Optional prep time update (admin can revise even post-accept)
+    if (req.body?.estimatedTime !== undefined) {
+      const eta = Number(req.body.estimatedTime);
+      if (Number.isInteger(eta) && eta >= 1 && eta <= 240) order.estimatedTime = eta;
+      else if (req.body.estimatedTime === null || req.body.estimatedTime === "") order.estimatedTime = null;
+    }
 
     await order.save();
 
     emitToRestaurant(order.restaurantId, "order_status_updated", {
-      orderId: order._id,
-      status: order.status,
-      completedAt: order.completedAt || null,
+      orderId:       order._id,
+      status:        order.status,
+      completedAt:   order.completedAt  || null,
+      acceptedAt:    order.acceptedAt   || null,
+      seatedAt:      order.seatedAt     || null,
+      estimatedTime: order.estimatedTime ?? null,
     });
 
     // ── Inventory: deduct raw materials on ACCEPTED ───────────────
@@ -861,6 +897,103 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────────────────────────
+// PATCH /api/orders/:id/estimated-time   { estimatedTime: 1–240 | null }
+// Admin can revise the prep time after accept so the customer's status
+// page always shows the current estimate.
+// ─────────────────────────────────────────────────────────────────
+const updateEstimatedTime = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const order = await Order.findOne({ _id: req.params.id, restaurantId });
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+    if (order.status === "REJECTED" || order.status === "CANCELLED" || order.status === "COMPLETED") {
+      return res.status(400).json({ success: false, message: "Cannot update prep time on a closed order." });
+    }
+
+    const raw = req.body?.estimatedTime;
+    if (raw === null || raw === "") {
+      order.estimatedTime = null;
+    } else {
+      const eta = Number(raw);
+      if (!Number.isInteger(eta) || eta < 1 || eta > 240) {
+        return res.status(400).json({ success: false, message: "estimatedTime must be a whole number between 1 and 240 minutes." });
+      }
+      order.estimatedTime = eta;
+    }
+
+    await order.save();
+
+    emitToRestaurant(restaurantId, "order_status_updated", {
+      orderId:       order._id,
+      status:        order.status,
+      estimatedTime: order.estimatedTime ?? null,
+      acceptedAt:    order.acceptedAt  || null,
+      seatedAt:      order.seatedAt    || null,
+    });
+
+    return res.status(200).json({ success: true, message: "Preparation time updated.", data: order });
+  } catch (error) {
+    console.error("Update Estimated Time Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────
+// PATCH /api/orders/:id/dispatch   (admin path — delivery orders only)
+// READY → OUT_FOR_DELIVERY. Mirrors the staff dispatch endpoint.
+// ─────────────────────────────────────────────────────────────────
+const dispatchDeliveryOrder = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const order = await Order.findOne({ _id: req.params.id, restaurantId });
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+    if (order.orderType !== "DELIVERY") {
+      return res.status(400).json({ success: false, message: "Only delivery orders can be dispatched." });
+    }
+    if (order.status === "OUT_FOR_DELIVERY") {
+      return res.status(409).json({ success: false, message: "Order is already out for delivery." });
+    }
+    if (order.status !== "READY") {
+      return res.status(409).json({ success: false, message: `Cannot dispatch — order is '${order.status}', expected 'READY'.` });
+    }
+
+    order.status = "OUT_FOR_DELIVERY";
+    await order.save();
+
+    emitToRestaurant(restaurantId, "order_status_updated", {
+      orderId:     order._id,
+      status:      order.status,
+      acceptedAt:  order.acceptedAt || null,
+      seatedAt:    order.seatedAt   || null,
+    });
+
+    // WhatsApp notification for out_for_delivery (fire-and-forget)
+    const Setting = require("../models/Setting");
+    try {
+      const settings = await Setting.findOne({ restaurantId }).select("restaurantName whatsappNotificationsEnabled countryCode").lean();
+      if (settings?.whatsappNotificationsEnabled !== false) {
+        await order.populate("customerId", "mobile name");
+        const { sendOrderStatusWhatsApp, buildOutForDeliveryMessage } = require("../services/whatsapp.service");
+        sendOrderStatusWhatsApp({
+          mobile: order.customerId?.mobile,
+          countryContext: settings?.countryCode,
+          body: buildOutForDeliveryMessage({ orderNumber: order.orderNumber, restaurantName: settings?.restaurantName || "FlowUp Restaurant" }),
+          event: "out_for_delivery",
+          logContext: { restaurantId, customerId: order.customerId?._id, orderId: order._id, countryCode: settings?.countryCode },
+        }).catch(() => {});
+      }
+    } catch (waErr) { console.error("[WhatsApp] dispatch notify error:", waErr.message); }
+
+    return res.status(200).json({ success: true, message: "Order dispatched for delivery.", data: order });
+  } catch (error) {
+    console.error("Dispatch Order Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 module.exports = {
   createOrder,
   getOrders,
@@ -868,4 +1001,6 @@ module.exports = {
   acceptOrder,
   rejectOrder,
   updateOrderStatus,
+  updateEstimatedTime,
+  dispatchDeliveryOrder,
 };

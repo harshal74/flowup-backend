@@ -361,4 +361,58 @@ module.exports = {
   deleteMenu,
   toggleAvailability,
   toggleRecommendation,
+  updateModifiers,
 };
+
+// ── PATCH /api/menu/:id/modifiers ────────────────────────────────
+// Replace the full modifiers array for a menu item (admin only).
+// Body: { modifiers: [{ name, price, isAvailable? }] }
+async function updateModifiers(req, res) {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const { id }       = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid menu item ID." });
+    }
+
+    const rawMods = req.body?.modifiers;
+    if (!Array.isArray(rawMods)) {
+      return res.status(400).json({ success: false, message: "modifiers must be an array." });
+    }
+
+    // Validate and sanitise each modifier
+    const mods = [];
+    for (const m of rawMods) {
+      if (!m.name || typeof m.name !== "string" || !m.name.trim()) {
+        return res.status(400).json({ success: false, message: "Each modifier must have a name." });
+      }
+      const price = Number(m.price);
+      if (!Number.isFinite(price) || price < 0) {
+        return res.status(400).json({ success: false, message: `Modifier "${m.name}" has an invalid price.` });
+      }
+      mods.push({
+        name:        m.name.trim().slice(0, 60),
+        price:       Math.round(price * 100) / 100,
+        isAvailable: m.isAvailable !== false,
+      });
+    }
+
+    if (mods.length > 20) {
+      return res.status(400).json({ success: false, message: "A menu item can have at most 20 modifiers." });
+    }
+
+    const item = await Menu.findOneAndUpdate(
+      { _id: id, restaurantId },
+      { $set: { modifiers: mods } },
+      { new: true, runValidators: true }
+    );
+
+    if (!item) return res.status(404).json({ success: false, message: "Menu item not found." });
+
+    return res.status(200).json({ success: true, message: "Modifiers updated.", data: item });
+  } catch (err) {
+    console.error("Update Modifiers Error:", err);
+    return res.status(500).json({ success: false, message: "Internal server error." });
+  }
+}

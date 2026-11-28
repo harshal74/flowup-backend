@@ -11,6 +11,7 @@ const {
   deleteMenu,
   toggleAvailability,
   toggleRecommendation,
+  updateModifiers,
 } = require("../controllers/menu.controller");
 
 const protect = require("../middleware/auth.middleware");
@@ -46,6 +47,13 @@ router.patch(
   "/:id/recommendation",
   protect,
   toggleRecommendation
+);
+
+// Replace the full modifiers (add-ons) array for a menu item
+router.patch(
+  "/:id/modifiers",
+  protect,
+  updateModifiers
 );
 
 module.exports = router;

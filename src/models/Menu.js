@@ -81,6 +81,19 @@ const menuSchema = new mongoose.Schema(
       },
     ],
 
+    // Structured add-ons (extra cheese +₹20, no onion, etc.)
+    // Price is added to the item's unit price when selected.
+    modifiers: {
+      type: [
+        {
+          name:         { type: String, required: true, trim: true, maxlength: 60 },
+          price:        { type: Number, required: true, min: 0, default: 0 },
+          isAvailable:  { type: Boolean, default: true },
+        },
+      ],
+      default: [],
+    },
+
     totalOrders: {
       type: Number,
       default: 0,

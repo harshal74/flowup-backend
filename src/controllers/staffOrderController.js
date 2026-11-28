@@ -104,6 +104,8 @@ async function transitionOrder(req, res, { fromStatus, toStatus, staffField, act
     if (toStatus === "ACCEPTED") {
       const eta = parseEstimatedTime(req.body?.estimatedTime);
       if (eta) order.estimatedTime = eta;
+      // Track when a dine-in table was first occupied
+      if (order.orderType === "DINE_IN" && !order.seatedAt) order.seatedAt = new Date();
     }
 
     await order.save();
@@ -117,6 +119,7 @@ async function transitionOrder(req, res, { fromStatus, toStatus, staffField, act
       servedBy:    order.servedBy    || null,
       completedAt: order.completedAt || null,
       acceptedAt:  order.acceptedAt  || null,
+      seatedAt:    order.seatedAt    || null,
       estimatedTime: order.estimatedTime ?? null,
     });
 

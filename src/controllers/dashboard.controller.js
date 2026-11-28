@@ -321,10 +321,96 @@ const getDashboardAnalytics = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────────────────
+// Item / Category Sales Report
+// GET /api/dashboard/item-sales?period=daily|weekly|monthly|total&offset=0
+// Returns revenue + quantity per item and per category for the range.
+// ─────────────────────────────────────────────────────────
+const getItemSalesReport = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const period  = req.query.period  || "weekly";
+    const offset  = parseInt(req.query.offset || "0", 10) || 0;
+    const { start, end } = getDateRange(period, offset);
+
+    const match = { restaurantId, status: "COMPLETED", paymentStatus: "PAID" };
+    if (start) match.createdAt = { $gte: start, $lte: end };
+
+    const [byItem, byCategory] = await Promise.all([
+      // Per item: name, quantity, revenue
+      Order.aggregate([
+        { $match: match },
+        { $unwind: "$items" },
+        {
+          $group: {
+            _id: "$items.name",
+            quantity:  { $sum: "$items.quantity" },
+            revenue:   { $sum: "$items.subtotal" },
+          },
+        },
+        { $sort: { revenue: -1 } },
+        { $limit: 50 },
+      ]),
+      // Per category: aggregate from item level via menu join
+      Order.aggregate([
+        { $match: match },
+        { $unwind: "$items" },
+        {
+          $lookup: {
+            from: "menus",
+            localField: "items.menuId",
+            foreignField: "_id",
+            as: "menuDoc",
+          },
+        },
+        { $unwind: "$menuDoc" },
+        {
+          $group: {
+            _id: "$menuDoc.categoryId",
+            quantity:  { $sum: "$items.quantity" },
+            revenue:   { $sum: "$items.subtotal" },
+          },
+        },
+        {
+          $lookup: {
+            from: "categories",
+            localField: "_id",
+            foreignField: "_id",
+            as: "catDoc",
+          },
+        },
+        { $unwind: "$catDoc" },
+        {
+          $project: {
+            _id: 0,
+            categoryId: "$_id",
+            name: "$catDoc.name",
+            quantity: 1,
+            revenue: 1,
+          },
+        },
+        { $sort: { revenue: -1 } },
+      ]),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        items: byItem.map((i) => ({ name: i._id, quantity: i.quantity, revenue: Math.round(i.revenue * 100) / 100 })),
+        categories: byCategory,
+      },
+    });
+  } catch (error) {
+    console.error("Item Sales Report Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 module.exports = {
   getDashboardStats,
   getRecentOrders,
   getTopSellingItems,
   getOrderStatusStats,
   getDashboardAnalytics,
+  getItemSalesReport,
 };
